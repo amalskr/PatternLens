@@ -10,6 +10,7 @@ Setup:
   2. Send any message to your new bot, then run:  TELEGRAM_TOKEN=... python alerts.py --chat-id
   3. Test:  TELEGRAM_TOKEN=... TELEGRAM_CHAT_ID=... python alerts.py --test
   4. Run with the forward log:  TELEGRAM_TOKEN=... TELEGRAM_CHAT_ID=... python forward_log.py --loop 300
+  5. Right now, whatever the signals are:  python alerts.py --now
 """
 import argparse
 import json
@@ -48,23 +49,33 @@ def _save(st):
     STATE.write_text(json.dumps(st, indent=1))
 
 
+def _model_status(path, fetch):
+    sym, tf = path.stem.rsplit("_", 1)
+    b = joblib.load(path)
+    df = fetch(sym, tf)
+    X, _ = build_features(df)
+    p = float(b["iso"].predict(b["model"].predict_proba(X[b["features"]].iloc[[-1]])[:, 1])[0])
+    signal = "BUY" if p >= b["up"] else "SELL" if p <= b["dn"] else "NO TRADE"
+    px, step = float(df["close"].iloc[-1]), b["k"] * float(atr(df).iloc[-1])
+    hours = TF_MIN.get(tf, 60) * b["horizon"] / 60
+    span = f"{hours:g} hours" if hours >= 2 else f"{int(hours * 60)} minutes"
+    return dict(sym=sym, tf=tf, p=p, signal=signal, px=px, step=step, span=span, candle=df.index[-1].isoformat(),
+                auc=(b.get("cv_summary") or {}).get("auc") or float("nan"))
+
+
 def model_signals(fetch):
     """Check every trained model on its latest closed candle; alert when the signal changes to BUY or SELL."""
     st, sent = _state(), 0
     for path in sorted(Path("models").glob("*_*.joblib")):
         if path.stem == "pattern_call":
             continue
-        sym, tf = path.stem.rsplit("_", 1)
-        b = joblib.load(path)
         try:
-            df = fetch(sym, tf)
+            m = _model_status(path, fetch)
         except Exception as e:
-            print(f"alerts: {sym} {tf} fetch failed ({type(e).__name__})")
+            print(f"alerts: {path.stem} failed ({type(e).__name__})")
             continue
-        X, _ = build_features(df)
-        p = float(b["iso"].predict(b["model"].predict_proba(X[b["features"]].iloc[[-1]])[:, 1])[0])
-        signal = "BUY" if p >= b["up"] else "SELL" if p <= b["dn"] else "NO TRADE"
-        candle = df.index[-1].isoformat()
+        sym, tf, p, signal, candle = m["sym"], m["tf"], m["p"], m["signal"], m["candle"]
+        px, step, span, auc = m["px"], m["step"], m["span"], m["auc"]
         key = f"model|{path.stem}"
         last = st.get(key, {})
         if last.get("candle") == candle:
@@ -72,10 +83,6 @@ def model_signals(fetch):
         st[key] = {"candle": candle, "signal": signal}
         if signal == "NO TRADE" or signal == last.get("signal"):
             continue  # alert only when a trade signal appears or flips
-        px, step = float(df["close"].iloc[-1]), b["k"] * float(atr(df).iloc[-1])
-        hours = TF_MIN.get(tf, 60) * b["horizon"] / 60
-        span = f"{hours:g} hours" if hours >= 2 else f"{int(hours * 60)} minutes"
-        auc = (b.get("cv_summary") or {}).get("auc")
         msg = (f"✨ AI model: {signal} signal, {sym} {tf}\n"
                f"Price {px:.5g}, candle closed {pd.Timestamp(candle).tz_convert('Asia/Colombo'):%d %b %H:%M} (Sri Lanka)\n"
                + (f"Next {span}: {100 * p:.0f}% chance price reaches {px + step:.5g} before {px - step:.5g}.\n" if signal == "BUY" else
@@ -133,6 +140,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--chat-id", action="store_true", help="print the chat id of whoever messaged the bot")
     ap.add_argument("--test", action="store_true", help="send a test message")
+    ap.add_argument("--now", action="store_true", help="send the current model signals and open patterns now")
     a = ap.parse_args()
     if a.chat_id:
         r = requests.get(f"https://api.telegram.org/bot{os.environ['TELEGRAM_TOKEN']}/getUpdates", timeout=15).json()
@@ -140,6 +148,24 @@ def main():
         print(chats or "No messages yet: send any message to your bot in Telegram first, then run this again.")
     elif a.test:
         print("sent" if send("Pattern Lens: Telegram alerts are working.") else "failed")
+    elif a.now:
+        import forward_log as fl
+        lines = ["✨ AI model signals now (test score 0.500 = coin flip):"]
+        for path in sorted(Path("models").glob("*_*.joblib")):
+            if path.stem == "pattern_call":
+                continue
+            try:
+                m = _model_status(path, fl.fetch)
+                lines.append(f"{m['sym']} {m['tf']}: {m['signal']}, {100 * m['p']:.0f}% chance of "
+                             f"{m['px'] + m['step']:.5g} before {m['px'] - m['step']:.5g} (next {m['span']})")
+            except Exception as e:
+                lines.append(f"{path.stem}: failed ({type(e).__name__})")
+        recs = [r for r in fl.get_store().all() if not r.get("resolved")]
+        lines.append(f"\nOpen in the forward log: {len(recs)}")
+        for r in sorted(recs, key=lambda r: (r["symbol"], r["timeframe"]))[:15]:
+            st = "forming" if r["status"] == "forming" else f"broke {'up' if r['bdir'] > 0 else 'down'}"
+            lines.append(f"{r['symbol']} {r['timeframe']} {r['pattern']}: {st}")
+        print("sent" if send("\n".join(lines) + "\nNot financial advice.") else "failed")
 
 
 if __name__ == "__main__":

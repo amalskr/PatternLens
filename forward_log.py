@@ -9,6 +9,7 @@ Storage: an SQLite file locally, or Firestore when hosted (LOG_BACKEND=firestore
 
 Usage:
   python forward_log.py --loop 900      # scan every 15 minutes while this runs
+  LOG_DB=results/test_log.sqlite TIMEFRAMES=5m python forward_log.py --loop 60   # quick alert test, kept apart
   python forward_log.py --report        # print the track record so far
 Watchlist: WATCHLIST=ADAUSDT,BTCUSDT  TIMEFRAMES=15m,1h,4h  (environment variables)
 """
@@ -37,7 +38,8 @@ BASELINE = {"lean_side_random_%": 62.8, "target_random_%": 26.8, "target_researc
 
 
 class SqliteStore:
-    def __init__(self, path="results/forward_log.sqlite"):
+    def __init__(self, path=None):
+        path = path or os.environ.get("LOG_DB", "results/forward_log.sqlite")  # LOG_DB: a separate file for tests
         Path(path).parent.mkdir(exist_ok=True)
         self.db = sqlite3.connect(path, check_same_thread=False, timeout=15)  # the logger and the server share the file
         self.db.execute("CREATE TABLE IF NOT EXISTS log (key TEXT PRIMARY KEY, data TEXT)")
