@@ -11,7 +11,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from features import build_features, klines_to_df
-from fastapi.responses import RedirectResponse
 
 app = FastAPI(title="Pattern Lens model server")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"], allow_headers=["*"])
@@ -24,13 +23,13 @@ def clean(d):
 
 MODELS = {p.stem: joblib.load(p) for p in Path("models").glob("*.joblib")}
 
-@app.get("/", include_in_schema=False)
-def root():
-    return RedirectResponse("/docs")
 
 @app.get("/predict")
 def predict(symbol: str = "ADAUSDT", interval: str = "1h"):
     key = f"{symbol.upper()}_{interval}"
+    path = Path("models") / f"{key}.joblib"
+    if key not in MODELS and path.exists():  # trained after the server started: load it now
+        MODELS[key] = joblib.load(path)
     if key not in MODELS:
         raise HTTPException(404, f"No model for {key}. Run data.py and train.py for it first.")
     b = MODELS[key]
@@ -49,4 +48,4 @@ def predict(symbol: str = "ADAUSDT", interval: str = "1h"):
 
 @app.get("/models")
 def models():
-    return sorted(MODELS)
+    return sorted(p.stem for p in Path("models").glob("*.joblib"))

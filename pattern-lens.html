@@ -23,6 +23,10 @@ input{width:120px;text-transform:uppercase}
 button{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:500;cursor:pointer}
 button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 label.chk{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)}
+.live{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);min-width:190px}
+.live::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--line)}
+.live.on::before{background:var(--up)}
+.live.off::before{background:var(--down)}
 .grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px}
 @media (max-width:900px){.grid{grid-template-columns:1fr}}
 .panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
@@ -58,13 +62,14 @@ td.n{text-align:right}th.n{text-align:right}
     <div class="controls">
       <input id="sym" value="ADAUSDT" aria-label="Symbol" spellcheck="false">
       <select id="tf" aria-label="Timeframe">
-        <option value="5m">5m</option><option value="15m">15m</option><option value="1h" selected>1h</option><option value="4h">4h</option>
+        <option value="15m">15m</option><option value="1h" selected>1h</option><option value="4h">4h</option>
       </select>
       <select id="hz" aria-label="Look-ahead candles">
         <option value="3">Next 3 candles</option><option value="5" selected>Next 5 candles</option><option value="10">Next 10 candles</option>
       </select>
       <button id="load">Load chart</button>
       <label class="chk"><input type="checkbox" id="auto" checked style="width:auto"> Auto refresh</label>
+      <span class="live" id="liveBadge" aria-live="polite">Connecting…</span>
     </div>
   </header>
 
@@ -109,7 +114,13 @@ td.n{text-align:right}th.n{text-align:right}
 <script>
 const $ = s => document.querySelector(s);
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-let chart, candleS, ema20S, ema50S, timer = null, ws = null, wsKey = '', prec = 4;
+let chart, candleS, ema20S, ema50S, timer = null, ws = null, wsKey = '', prec = 4, lastTick = 0, lastPx = null;
+function setLive(text, state) { const b = $('#liveBadge'); b.textContent = text; b.className = 'live' + (state ? ' ' + state : ''); }
+setInterval(() => {
+  if (!lastTick || !ws || ws.readyState !== 1) return;
+  const secs = Math.round((Date.now() - lastTick) / 1000);
+  setLive(`Live ${lastPx.toFixed(prec)}, ${secs < 2 ? 'just now' : secs + 's ago'}`, 'on');
+}, 1000);
 // Lightweight Charts draws every timestamp as UTC. Shifting each one by this computer's offset
 // makes the axis, crosshair and day boundaries show local time (Sri Lanka: UTC+5:30).
 const toChartTime = ms => Math.floor(ms / 1000) - new Date(ms).getTimezoneOffset() * 60;
@@ -290,7 +301,7 @@ async function run() {
   }).join('') || '<tr><td colspan="4" class="mut">No patterns yet.</td></tr>';
 
   modelSignal(sym, tf);
-  if (demo) stopLive(); else startLive(sym, tf);
+  if (demo) { stopLive(); setLive('Sample data', 'off'); } else startLive(sym, tf);
   if (!demo) { st.textContent = `${sym} ${tf}: ${c.length} closed candles, ${found.length} patterns. Updated ${new Date().toLocaleTimeString()}.`; st.className = 'status'; }
 }
 
@@ -318,7 +329,7 @@ async function modelSignal(sym, tf) {
 }
 
 function stopLive() {
-  wsKey = '';
+  wsKey = ''; lastTick = 0;
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
 }
 function startLive(sym, tf) {
@@ -327,14 +338,23 @@ function startLive(sym, tf) {
   stopLive();
   wsKey = key;
   ws = new WebSocket(`wss://fstream.binance.com/ws/${sym.toLowerCase()}@kline_${tf}`);
+  setLive('Connecting…', '');
+  ws.onopen = () => setLive('Live, waiting for first tick', 'on');
+  ws.onerror = () => setLive('Live feed blocked, updating every minute', 'off');
   ws.onmessage = ev => {
     const k = JSON.parse(ev.data).k;
     if (!k) return;
+    lastTick = Date.now(); lastPx = +k.c;
     candleS.update({time: toChartTime(k.t), open: +k.o, high: +k.h, low: +k.l, close: +k.c});
     document.title = `${(+k.c).toFixed(prec)} ${sym} ${tf}: Pattern Lens`;
     if (k.x) setTimeout(run, 2000);  // candle just closed: rescan patterns and the model
   };
-  ws.onclose = () => setTimeout(() => { if (wsKey === key) { ws = null; wsKey = ''; startLive(sym, tf); } }, 3000);
+  const sock = ws;
+  ws.onclose = () => {
+    if (ws !== sock) return;  // an old socket we replaced on purpose
+    setLive('Reconnecting…', 'off');
+    setTimeout(() => { if (ws === sock) { ws = null; wsKey = ''; startLive(sym, tf); } }, 3000);
+  };
 }
 
 function schedule() { clearInterval(timer); if ($('#auto').checked) timer = setInterval(run, 60000); }
