@@ -2,6 +2,7 @@
 
 Usage: uvicorn serve:app --port 8000
 """
+import csv
 import math
 from pathlib import Path
 
@@ -49,3 +50,15 @@ def predict(symbol: str = "ADAUSDT", interval: str = "1h"):
 @app.get("/models")
 def models():
     return sorted(p.stem for p in Path("models").glob("*.joblib"))
+
+
+@app.get("/stats")
+def stats(symbol: str = "ADAUSDT", interval: str = "1h", horizon: int = 5):
+    """Full-history pattern results written by pattern_stats.py, for the page's bias panel."""
+    path = Path("results") / f"pattern_stats_{symbol.upper()}_{interval}_h{horizon}.csv"
+    if not path.exists():
+        raise HTTPException(404, f"Run: python pattern_stats.py --symbol {symbol.upper()} --interval {interval} --horizon {horizon}")
+    with open(path) as fh:
+        rows = list(csv.DictReader(fh))
+    return [{"pattern": r["pattern"], "trend": r["trend"], "n": int(r["n"]), "win": float(r["win"]),
+             "base": float(r["base"]), "p_holm": float(r["p_holm"])} for r in rows]
