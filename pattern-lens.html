@@ -68,10 +68,10 @@ td.n{text-align:right}th.n{text-align:right}
         <option value="3">Next 3 candles</option><option value="5" selected>Next 5 candles</option><option value="10">Next 10 candles</option>
       </select>
       <select id="marks" aria-label="Chart markers">
-        <option value="trend" selected>Markers: trend changes</option><option value="backtest">Backtest: every pattern and its result</option><option value="breaks">Backtest: patterns at trend line breaks</option><option value="research">Markers: research signals</option><option value="all">Markers: all patterns</option><option value="none">Markers: none</option>
+        <option value="patterns" selected>Chart patterns and projection</option><option value="trend">Markers: trend changes</option><option value="backtest">Backtest: every pattern and its result</option><option value="breaks">Backtest: patterns at trend line breaks</option><option value="research">Markers: research signals</option><option value="all">Markers: all patterns</option><option value="none">Markers: none</option>
       </select>
       <select id="pat" aria-label="Pattern filter" style="display:none">
-        <option value="all">All patterns</option><option>Bull engulfing</option><option>Bear engulfing</option><option>Hammer</option><option>Shooting star</option><option>Morning star</option><option>Evening star</option><option>Three soldiers</option><option>Three crows</option><option>Double top</option><option>Double bottom</option>
+        <option value="all">All patterns</option><option>Bull engulfing</option><option>Bear engulfing</option><option>Hammer</option><option>Shooting star</option><option>Morning star</option><option>Evening star</option><option>Three soldiers</option><option>Three crows</option><option>Double top</option><option>Double bottom</option><option>Doji</option>
       </select>
       <label class="chk"><input type="checkbox" id="tl" style="width:auto"> Trend lines</label>
       <button id="load">Load chart</button>
@@ -100,6 +100,11 @@ td.n{text-align:right}th.n{text-align:right}
         <p class="bias-label" id="mLabel">…</p>
         <p class="bias-sub" id="mSub"></p>
         <ul class="reasons" id="mInfo"></ul>
+      </section>
+      <section class="panel" aria-live="polite">
+        <h2>Chart patterns</h2>
+        <div class="list" id="cpats"></div>
+        <p class="bias-sub" id="cpSum" style="margin:12px 0 0"></p>
       </section>
       <section class="panel">
         <h2>Recent patterns</h2>
@@ -143,6 +148,7 @@ const PATTERNS = {
   'Three soldiers': {dir: 1, short: '3S'},
   'Three crows': {dir: -1, short: '3C'},
   'Double bottom': {dir: 1, short: 'DB'},
+  'Doji': {dir: 0, short: 'D'},
   'Double top': {dir: -1, short: 'DT'}
 };
 
@@ -160,6 +166,7 @@ function initChart() {
   ema20S = chart.addLineSeries({lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false});
   ema50S = chart.addLineSeries({lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false});
   applySeriesColors();
+  chart.applyOptions({timeScale: {rightOffset: 12}});
   const ov = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   ov.id = 'overlay';
   ov.setAttribute('style', 'position:absolute;left:0;top:0;pointer-events:none;z-index:3;overflow:hidden');
@@ -213,6 +220,8 @@ function detect(c, e20) {
     if (bear(b) && bull(a) && a.open <= b.close && a.close >= b.open && bd > body(b)) found.push({i, name: 'Bull engulfing'});
     if (bull(b) && bear(a) && a.open >= b.close && a.close <= b.open && bd > body(b)) found.push({i, name: 'Bear engulfing'});
     if (bd > 0 && lo >= 2 * bd && up <= 0.5 * bd && a.close < e20[i]) found.push({i, name: 'Hammer'});
+    const rg = a.high - a.low;
+    if (rg > 0 && bd <= 0.1 * rg && rg >= 1.5 * ab) found.push({i, name: 'Doji'});  // indecision: tiny body, wide range
     if (bd > 0 && up >= 2 * bd && lo <= 0.5 * bd && a.close > e20[i]) found.push({i, name: 'Shooting star'});
     if (bear(z) && body(z) > ab && body(b) < 0.3 * body(z) && bull(a) && a.close > (z.open + z.close) / 2) found.push({i, name: 'Morning star'});
     if (bull(z) && body(z) > ab && body(b) < 0.3 * body(z) && bear(a) && a.close < (z.open + z.close) / 2) found.push({i, name: 'Evening star'});
@@ -244,7 +253,12 @@ function stats(c, found, H) {
   Object.keys(PATTERNS).forEach(n => s[n] = {seen: 0, tested: 0, worked: 0, move: 0});
   found.forEach(f => {
     const r = s[f.name]; r.seen++;
-    if (f.i + H < c.length) { const ret = (c[f.i + H].close / c[f.i].close - 1) * f.dir; r.tested++; r.move += ret; if (ret > 0) r.worked++; }
+    if (f.i + H < c.length) {
+      const raw = c[f.i + H].close / c[f.i].close - 1;
+      r.tested++;
+      if (f.dir === 0) { r.move += Math.abs(raw); return; }  // Doji has no direction: report the size of the next move
+      const ret = raw * f.dir; r.move += ret; if (ret > 0) r.worked++;
+    }
   });
   return s;
 }
@@ -252,11 +266,16 @@ function stats(c, found, H) {
 function bias(c, found, st, e20, e50, rs) {
   const last = c.length - 1, reasons = []; let score = 0;
   found.filter(f => f.i >= last - 2).forEach(f => {
-    const r = st[f.name]; let w = 1;
+    const r = st[f.name], ago = last - f.i === 0 ? 'on the last closed candle' : (last - f.i === 1 ? '1 candle ago' : (last - f.i) + ' candles ago');
+    if (!f.dir) {  // Doji: indecision, no direction to score
+      reasons.push(`Doji (indecision) ${ago}${r.tested >= 5 ? `; after a Doji price moved ${(100 * r.move / r.tested).toFixed(2)}% on average, either way` : ''}`);
+      return;
+    }
+    let w = 1;
     if (r.tested >= 5) w = Math.max(-1, Math.min(1, (r.worked / r.tested - 0.5) * 4));
     score += f.dir * w;
     const rate = r.tested >= 5 ? `, worked ${Math.round(100 * r.worked / r.tested)}% of ${r.tested} times here` : ', too few past cases to trust';
-    reasons.push(`${f.name} ${last - f.i === 0 ? 'on the last closed candle' : (last - f.i === 1 ? '1 candle ago' : (last - f.i) + ' candles ago')}${rate}`);
+    reasons.push(`${f.name} ${ago}${rate}`);
   });
   if (e20[last] > e50[last]) { score += 0.5; reasons.push('EMA 20 is above EMA 50, short-term trend is up'); }
   else { score -= 0.5; reasons.push('EMA 20 is below EMA 50, short-term trend is down'); }
@@ -269,7 +288,7 @@ function bias(c, found, st, e20, e50, rs) {
 }
 
 const SPAN = {'Bull engulfing': 2, 'Bear engulfing': 2, 'Hammer': 1, 'Shooting star': 1, 'Morning star': 3,
-  'Evening star': 3, 'Three soldiers': 3, 'Three crows': 3};
+  'Evening star': 3, 'Three soldiers': 3, 'Three crows': 3, 'Doji': 1};
 let tlSeries = [], boxPending = false;
 
 function pivots(c, k) {
@@ -312,12 +331,32 @@ function scheduleBoxes() {
 function drawBoxes() {
   const svg = $('#overlay');
   if (!svg) return;
-  if (!lastRun || !lastRun.boxes || !lastRun.boxes.length) { svg.innerHTML = ''; return; }
+  if (!lastRun || (!(lastRun.boxes || []).length && !(lastRun.shapes || []).length)) { svg.innerHTML = ''; return; }
   const c = lastRun.c, ts = chart.timeScale(), bs = ts.options().barSpacing;
   svg.setAttribute('width', ts.width());
   svg.setAttribute('height', Math.max(0, $('#chart').clientHeight - ts.height()));
   let out = '';
-  for (const b of lastRun.boxes) {
+  const X = i => ts.logicalToCoordinate(i), Y = v => candleS.priceToCoordinate(v);
+  for (const sh of lastRun.shapes || []) {
+    if (sh.t === 'path') {
+      const pts = sh.pts.map(([i, v]) => [X(i), Y(v)]);
+      if (pts.some(([x, y]) => x === null || y === null)) continue;
+      out += `<polyline points="${pts.map(q => q.join(',')).join(' ')}" fill="none" stroke="${sh.col}" stroke-width="2.5" stroke-opacity="${sh.op}" stroke-dasharray="2 5" stroke-linecap="round"/>`;
+      const [ex, ey] = pts.at(-1);
+      out += `<circle cx="${ex}" cy="${ey}" r="5" fill="${sh.col}" fill-opacity="${sh.op}"/>`;
+      continue;
+    }
+    if (sh.t === 'line') {
+      const x1 = X(sh.i1), x2 = X(sh.i2), y1 = Y(sh.p1), y2 = Y(sh.p2);
+      if ([x1, x2, y1, y2].some(v => v === null)) continue;
+      out += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${sh.col}" stroke-width="${sh.w || 1.6}"${sh.dash ? ' stroke-dasharray="5 4"' : ''}/>`;
+    } else {
+      const x = X(sh.i), y = Y(sh.p);
+      if (x === null || y === null) continue;
+      out += `<text x="${x}" y="${y + (sh.dy || 0)}" text-anchor="${sh.anchor || 'start'}" font-size="11" font-weight="600" font-family="Sora, system-ui, sans-serif" fill="${sh.col}">${sh.text}</text>`;
+    }
+  }
+  for (const b of lastRun.boxes || []) {
     const x1 = ts.timeToCoordinate(c[b.from].time), x2 = ts.timeToCoordinate(c[b.i].time);
     if (x1 === null || x2 === null || x2 < -50 || x1 > ts.width() + 50) continue;
     let hi = -Infinity, lo = Infinity;
@@ -330,6 +369,195 @@ function drawBoxes() {
     out += `<text x="${x}" y="${y - 5}" font-size="11" font-family="Sora, system-ui, sans-serif" fill="${col}">${b.label}</text>`;
   }
   svg.innerHTML = out;
+}
+
+// ---------- Chart patterns (flags, pennants, wedges, triangles, rectangles, double tops/bottoms, H&S) ----------
+// Swing points come from a zigzag that needs a reversal of 2 ATR. A swing point is only known on the
+// candle that confirms it (conf), so pattern detection and breakout checks never use future candles.
+function atrArr(c, p = 14) {
+  const out = [];
+  let v = null;
+  for (let i = 0; i < c.length; i++) {
+    const tr = i ? Math.max(c[i].high - c[i].low, Math.abs(c[i].high - c[i - 1].close), Math.abs(c[i].low - c[i - 1].close)) : c[i].high - c[i].low;
+    v = v === null ? tr : (v * (p - 1) + tr) / p;
+    out.push(v);
+  }
+  return out;
+}
+function zigzag(c, a, mult = 2) {
+  const piv = [];
+  let trend = 0, hiI = 0, loI = 0;
+  const argmax = (s, e) => { let m = s; for (let j = s; j <= e; j++) if (c[j].high >= c[m].high) m = j; return m; };
+  const argmin = (s, e) => { let m = s; for (let j = s; j <= e; j++) if (c[j].low <= c[m].low) m = j; return m; };
+  for (let i = 1; i < c.length; i++) {
+    const th = mult * a[i];
+    if (trend !== -1 && c[i].high >= c[hiI].high) hiI = i;
+    if (trend !== 1 && c[i].low <= c[loI].low) loI = i;
+    if (trend !== -1 && hiI < i && c[hiI].high - c[i].low >= th) {
+      piv.push({i: hiI, p: c[hiI].high, t: 'H', conf: i}); trend = -1; loI = argmin(hiI + 1, i);
+    } else if (trend !== 1 && loI < i && c[i].high - c[loI].low >= th) {
+      piv.push({i: loI, p: c[loI].low, t: 'L', conf: i}); trend = 1; hiI = argmax(loI + 1, i);
+    }
+  }
+  return piv;
+}
+const lineThrough = (i1, p1, i2, p2) => i => p1 + (p2 - p1) / (i2 - i1) * (i - i1);
+
+function chartPatterns(c) {
+  const a = atrArr(c), piv = zigzag(c, a), found = [];
+  const poleOf = w => (w.at(0).p - c[Math.max(0, w.at(0).i - 12)].close) / a[w.at(0).i];
+  // Two-line patterns: triangles, wedges, pennants, flags, rectangles
+  const tri = w => {
+    const H = w.filter(x => x.t === 'H'), L = w.filter(x => x.t === 'L');
+    if (H.length < 2 || L.length < 2) return null;
+    const h0 = H.at(0), h1 = H.at(-1), l0 = L.at(0), l1 = L.at(-1);
+    const U = lineThrough(h0.i, h0.p, h1.i, h1.p), D = lineThrough(l0.i, l0.p, l1.i, l1.p);
+    const s = w.at(0).i, e = w.at(-1).i, ae = a[e];
+    if (H.some(x => Math.abs(x.p - U(x.i)) > 0.6 * ae) || L.some(x => Math.abs(x.p - D(x.i)) > 0.6 * ae)) return null;
+    let bad = 0;
+    for (let j = s; j <= e; j++) if (c[j].close > U(j) + 0.3 * ae || c[j].close < D(j) - 0.3 * ae) bad++;
+    if (bad > 0.1 * (e - s + 1)) return null;
+    const w0 = U(s) - D(s), w1 = U(e) - D(e);
+    if (w0 < 1.5 * ae || w1 <= 0) return null;
+    // Flags and pennants are short pauses after a sharp move: a pole of 3.5 ATR or more, the pattern no
+    // longer than 30 candles and no taller than 60% of the pole
+    const pole = poleOf(w), hasPole = Math.abs(pole) >= 3.5 && e - s <= 30 && w0 <= 0.6 * Math.abs(pole) * ae;
+    // Each line's total rise or fall across the pattern, in ATRs: within 0.8 counts as flat
+    const su = (U(e) - U(s)) / ae, sl = (D(e) - D(s)) / ae, eps = 0.8, flat = x => Math.abs(x) <= eps;
+    const conv = w1 < 0.75 * w0, par = Math.abs(w1 - w0) < 0.3 * w0;
+    let name = null, dir = 0, height = w0, bilateral = false;
+    if (conv) {
+      if (flat(su) && sl > eps) { name = 'Ascending triangle'; dir = 1; bilateral = true; }
+      else if (flat(sl) && su < -eps) { name = 'Descending triangle'; dir = -1; bilateral = true; }
+      else if (su < -eps && sl > eps) {
+        if (hasPole) { name = pole > 0 ? 'Bullish pennant' : 'Bearish pennant'; dir = Math.sign(pole); height = Math.abs(pole) * ae; }
+        else { name = 'Symmetrical triangle'; bilateral = true; }
+      }
+      else if (su > eps && sl > eps) { name = 'Rising wedge'; dir = -1; }
+      else if (su < -eps && sl < -eps) { name = 'Falling wedge'; dir = 1; }
+    } else if (par) {
+      if (flat(su) && flat(sl)) {
+        if (Math.abs(pole) >= 2.5) { name = pole > 0 ? 'Bullish rectangle' : 'Bearish rectangle'; dir = Math.sign(pole); }
+        else { name = 'Consolidation channel'; bilateral = true; }
+      } else if (hasPole && pole > 0 && su < eps && sl < eps) { name = 'Bull flag'; dir = 1; height = pole * ae; }
+      else if (hasPole && pole < 0 && su > -eps && sl > -eps) { name = 'Bear flag'; dir = -1; height = -pole * ae; }
+    }
+    if (!name) return null;
+    return {kind: 'lines', name, dir, bilateral, s, e, U, D, height, a: ae, conf: w.at(-1).conf};
+  };
+  // Neckline patterns: head and shoulders (5 swings), double top or bottom (3 swings)
+  const hs = w => {
+    const [p0, p1, p2, p3, p4] = w, inv = p0.t === 'L', sg = inv ? -1 : 1, ae = a[p4.i];
+    const N = lineThrough(p1.i, p1.p, p3.i, p3.p);
+    if (sg * p2.p - Math.max(sg * p0.p, sg * p4.p) < 0.5 * ae) return null;
+    if (Math.abs(p0.p - p4.p) > 1.5 * ae) return null;
+    if (Math.abs((p3.p - p1.p) / (p3.i - p1.i)) / ae > 0.1) return null;
+    if (sg * (p0.p - N(p0.i)) < 0.5 * ae || sg * (p4.p - N(p4.i)) < 0.5 * ae) return null;
+    return {kind: 'neck', name: inv ? 'Inverse head and shoulders' : 'Head and shoulders', dir: inv ? 1 : -1,
+      s: p0.i, e: p4.i, N, pts: w, height: sg * (p2.p - N(p2.i)), a: ae, conf: p4.conf,
+      inval: p4.p + sg * 0.2 * ae, stopLv: p4.p + sg * 0.2 * ae};  // past the right shoulder = pattern failed
+  };
+  const dbl = w => {
+    const [p0, p1, p2] = w, top = p0.t === 'H', sg = top ? 1 : -1, ae = a[p2.i];
+    if (Math.abs(p0.p - p2.p) > 0.6 * ae) return null;
+    if (sg * poleOf(w) < 2) return null;  // needs a move into the first peak (or trough)
+    const lv = p1.p, ext = top ? Math.max(p0.p, p2.p) : Math.min(p0.p, p2.p);
+    return {kind: 'neck', name: top ? 'Double top' : 'Double bottom', dir: -sg, s: p0.i, e: p2.i, N: () => lv, pts: w,
+      height: sg * (ext - lv), a: ae, conf: p2.conf, inval: ext + sg * 0.3 * ae, stopLv: ext + sg * 0.3 * ae};
+  };
+  // Scan windows of 6, 5, 4 swing points (then 3 for double tops). A later window that starts inside the
+  // previous pattern with the same name, or a bigger one that contains it, replaces it; other overlaps are skipped.
+  for (let e = 2; e < piv.length; e++) {
+    const prev = found.at(-1);
+    for (const n of [6, 5, 4, 3]) {
+      const s = e - n + 1;
+      if (s < 0) continue;
+      const w = piv.slice(s, e + 1);
+      const hit = (n >= 4 && tri(w)) || (n === 5 && hs(w)) || (n === 3 && dbl(w));
+      if (!hit) continue;
+      hit.ps = s; hit.pe = e;
+      if (!prev || s >= prev.pe) { found.push(hit); break; }
+      const grew = s >= prev.ps && hit.name === prev.name;          // same pattern, one more touch
+      const covers = s <= prev.ps && e - s > prev.pe - prev.ps;      // a bigger pattern that contains it
+      if (grew || covers) { found[found.length - 1] = hit; break; }
+    }
+  }
+  // Cup and handle: two rims at about the same level, a rounded (not V-shaped) bottom at least 3 ATR deep,
+  // then a handle that gives back at most half the cup depth and lasts at most half as long as the cup.
+  // Rims at highs = cup and handle (bullish); rims at lows = inverse cup and handle (bearish).
+  const cups = [];
+  for (let x = 0; x < piv.length; x++) for (let y = x + 2; y < piv.length - 1; y++) {
+    const A = piv[x], B = piv[y], Hd = piv[y + 1];
+    if (A.t !== B.t) continue;
+    const top = A.t === 'H', sg = top ? 1 : -1, ae = a[B.i], len = B.i - A.i;
+    if (len < 15 || len > 150 || Math.abs(A.p - B.p) > ae) continue;
+    const rim = top ? Math.max(A.p, B.p) : Math.min(A.p, B.p);
+    let ext = top ? Infinity : -Infinity, extI = A.i, inside = true;
+    for (let j = A.i + 1; j < B.i; j++) {
+      if (top ? c[j].high > rim + 0.2 * ae : c[j].low < rim - 0.2 * ae) { inside = false; break; }
+      if (top ? c[j].low < ext : c[j].high > ext) { ext = top ? c[j].low : c[j].high; extI = j; }
+    }
+    if (!inside) continue;
+    const depth = sg * (rim - ext);
+    if (depth < 3 * ae || extI < A.i + 0.2 * len || extI > A.i + 0.8 * len) continue;
+    let nearBottom = 0;
+    for (let j = A.i; j <= B.i; j++) if (sg * (c[j].close - ext) <= 0.35 * depth) nearBottom++;
+    if (nearBottom < 0.25 * (len + 1)) continue;  // a V spends little time near its bottom; a cup spends a lot
+    if (sg * (B.p - Hd.p) > 0.5 * depth || Hd.i - B.i > 0.5 * len) continue;
+    const arc = [];
+    for (let j = A.i; j <= B.i; j += Math.max(1, Math.round(len / 24))) {
+      const half = j < extI ? extI - A.i : B.i - extI, q = (j - extI) / half;
+      arc.push({i: j, p: ext + sg * depth * Math.min(1, q * q)});
+    }
+    arc.push({i: B.i, p: B.p}, {i: Hd.i, p: Hd.p});
+    cups.push({kind: 'neck', name: top ? 'Cup and handle' : 'Inverse cup and handle', dir: sg, s: A.i, e: Hd.i,
+      N: lineThrough(A.i, A.p, B.i, B.p), pts: arc, height: depth, a: ae, conf: Hd.conf,
+      inval: Hd.p - sg * 0.2 * ae, stopLv: Hd.p - sg * 0.2 * ae});
+  }
+  // keep cups that do not overlap each other (the earliest wins), and drop other patterns that lie mostly
+  // inside a cup: the same swings, but the rounded bottom and the handle make it a cup
+  const kept = [];
+  cups.forEach(cp => { if (!kept.some(k => cp.s <= k.e && k.s <= cp.e)) kept.push(cp); });
+  const overlap = (pt, k) => Math.max(0, Math.min(pt.e, k.e) - Math.max(pt.s, k.s)) / Math.max(1, pt.e - pt.s);
+  const all = found.filter(pt => !kept.some(k => overlap(pt, k) > 0.5))
+    .concat(kept).sort((x, y) => x.s - y.s);
+  const last = c.length - 1;
+  all.forEach(pt => resolvePattern(pt, c, last));
+  return all;
+}
+
+function resolvePattern(pt, c, last) {
+  const len = pt.e - pt.s, wait = Math.max(10, len), sg = pt.dir, neck = pt.kind === 'neck';
+  const upB = neck ? (sg > 0 ? pt.N : null) : pt.U;
+  const dnB = neck ? (sg < 0 ? pt.N : null) : pt.D;
+  pt.brk = null; pt.bdir = 0; pt.wait = wait;
+  for (let j = pt.conf; j <= Math.min(last, pt.e + wait); j++) {
+    if (neck && (sg < 0 ? c[j].high > pt.inval : c[j].low < pt.inval)) { pt.brk = j; pt.bdir = -sg; break; }
+    if (upB && c[j].close > upB(j) + 0.1 * pt.a) { pt.brk = j; pt.bdir = 1; break; }
+    if (dnB && c[j].close < dnB(j) - 0.1 * pt.a) { pt.brk = j; pt.bdir = -1; break; }
+  }
+  const stopAt = (j, d) => neck ? pt.stopLv : (d > 0 ? pt.D(j) : pt.U(j));
+  if (pt.brk === null) {
+    if (pt.conf > last || pt.e + wait < last) { pt.status = 'expired'; return; }
+    pt.status = 'forming';
+    const d = sg || 1, ent = d > 0 ? (upB || pt.N)(last) : (dnB || pt.N)(last);
+    pt.entry = ent; pt.stop = stopAt(last, d); pt.target = ent + d * pt.height;
+    if (pt.bilateral) {  // either side can break: keep both plans
+      pt.up = {entry: pt.U(last), stop: pt.D(last), target: pt.U(last) + pt.height};
+      pt.dn = {entry: pt.D(last), stop: pt.U(last), target: pt.D(last) - pt.height};
+    }
+    return;
+  }
+  if (sg && pt.bdir !== sg && !pt.bilateral) { pt.status = 'other way'; return; }
+  const d = pt.bdir, ent = c[pt.brk].close;
+  pt.entry = ent; pt.stop = stopAt(pt.brk, d); pt.target = ent + d * pt.height;
+  pt.status = 'open';
+  for (let j = pt.brk + 1; j <= Math.min(last, pt.brk + 3 * Math.max(len, 10)); j++) {
+    const hitStop = d > 0 ? c[j].low <= pt.stop : c[j].high >= pt.stop;
+    const hitTgt = d > 0 ? c[j].high >= pt.target : c[j].low <= pt.target;
+    if (hitStop) { pt.status = 'stop'; pt.res = j; break; }  // a candle that touches both counts as a loss
+    if (hitTgt) { pt.status = 'target'; pt.res = j; break; }
+  }
 }
 
 let lastRun = null;
@@ -354,7 +582,7 @@ function draw(run) {
     });
     $('#markNote').textContent = 'Research signals: after three red candles price rose within 5 candles 54% of the time (base 50%); after three green candles in a downtrend it rose only 47% (base 51%). A small statistical edge, not a trade signal.';
   } else if (mode === 'all') {
-    marks = found.map(f => mk(f.i, f.dir, PATTERNS[f.name].short));
+    marks = found.map(f => f.dir ? mk(f.i, f.dir, PATTERNS[f.name].short) : {time: c[f.i].time, position: 'aboveBar', color: css('--accent'), shape: 'circle', text: 'D'});
     $('#markNote').textContent = 'All patterns, labelled by their textbook direction.';
   } else $('#markNote').textContent = '';
 
@@ -381,8 +609,8 @@ function draw(run) {
   const move = f => f.i + H < c.length ? (c[f.i + H].close / c[f.i].close - 1) * f.dir : null;
   const nearBreak = f => brks.some(L => Math.abs(f.i - L.brk) <= 2);
   let sel = [];
-  if (mode === 'backtest') sel = found.filter(f => pat === 'all' || f.name === pat);
-  if (mode === 'breaks') sel = found.filter(f => nearBreak(f) && (pat === 'all' || f.name === pat));
+  if (mode === 'backtest') sel = found.filter(f => f.dir && (pat === 'all' || f.name === pat));
+  if (mode === 'breaks') sel = found.filter(f => f.dir && nearBreak(f) && (pat === 'all' || f.name === pat));
   run.boxes = sel.map(f => {
     const r = move(f);
     const res = r === null ? 'pending' : `${r > 0 ? '✓' : '✗'} ${r > 0 ? '+' : ''}${(r * 100).toFixed(2)}%`;
@@ -396,6 +624,64 @@ function draw(run) {
     $('#markNote').textContent = `Patterns within 2 candles of a trend line break: ${rate(sel)}. Same patterns anywhere: ${rate(found.filter(pf))}. About 500 candles only: check over full history before trusting a difference.`;
   if (showTL)
     $('#markNote').textContent += ' Dashed lines: falling resistance (red) and rising support (green) through swing points; a circle marks the close that broke a line.';
+
+  // Chart patterns: shapes on the chart (in that mode) and the side panel (always)
+  const pats = chartPatterns(c), ink = css('--ink'), acc = css('--accent'), fmt = v => v.toFixed(prec);
+  run.shapes = [];
+  const hitRate = name => {
+    const done = pats.filter(pt => pt.name === name && (pt.status === 'target' || pt.status === 'stop'));
+    return done.length ? `, hit ${done.filter(pt => pt.status === 'target').length} of ${done.length} times here` : '';
+  };
+  if (mode === 'patterns') {
+    pats.filter(pt => pt.status !== 'expired').forEach(pt => {
+      const col = pt.dir > 0 ? up : pt.dir < 0 ? dn : acc;
+      const endI = pt.brk ?? (pt.status === 'forming' ? last + 6 : Math.min(last, pt.e + pt.wait));
+      const L = (i1, p1, i2, p2, c2 = col, dash = false, w) => run.shapes.push({t: 'line', i1, p1, i2, p2, col: c2, dash, w});
+      if (pt.kind === 'lines') { L(pt.s, pt.U(pt.s), endI, pt.U(endI)); L(pt.s, pt.D(pt.s), endI, pt.D(endI)); }
+      else {
+        for (let k = 0; k + 1 < pt.pts.length; k++) L(pt.pts[k].i, pt.pts[k].p, pt.pts[k + 1].i, pt.pts[k + 1].p, col, true, 1.2);
+        L(pt.pts[0].i, pt.N(pt.pts[0].i), endI, pt.N(endI));
+      }
+      let topP = -Infinity;
+      for (let j = pt.s; j <= pt.e; j++) topP = Math.max(topP, c[j].high);
+      const tag = {forming: 'forming now', target: '✓ reached target', stop: '✗ hit stop', 'other way': '✗ broke the other way', open: 'open'}[pt.status];
+      run.shapes.push({t: 'text', i: pt.e, p: topP, dy: -10, col, anchor: 'end', text: `${pt.name}: ${tag}`});
+      if (pt.status === 'forming') {
+        // Faded projection: from the last close to the breakout level, then on to the measured target.
+        // Two paths when either side can break (bilateral), the textbook one drawn stronger.
+        const lenP = Math.max(6, Math.round((pt.e - pt.s) * 0.6)), now = c[last].close;
+        const plans = pt.bilateral ? [[1, pt.up], [-1, pt.dn]] : [[pt.dir, {entry: pt.entry, stop: pt.stop, target: pt.target}]];
+        plans.forEach(([d, pl]) => {
+          const c2 = d > 0 ? up : dn, main = !pt.bilateral || d === pt.dir;
+          run.shapes.push({t: 'path', col: c2, op: main ? 0.55 : 0.3, pts: [[last, now], [last + 3, pl.entry], [last + 3 + lenP, pl.target]]});
+          L(last + 1, pl.entry, last + 3 + lenP, pl.entry, acc, true, 1);
+          run.shapes.push({t: 'text', i: last + 4 + lenP, p: pl.target, dy: 4, col: c2, text: `Target ${fmt(pl.target)}${hitRate(pt.name)}`});
+          run.shapes.push({t: 'text', i: last + 4 + lenP, p: pl.entry, dy: 4, col: acc, text: `${d > 0 ? 'Break up' : 'Break down'} ${fmt(pl.entry)}`});
+        });
+        if (!pt.bilateral) {
+          L(last + 1, pt.stop, last + 3 + lenP, pt.stop, dn, true, 1);
+          run.shapes.push({t: 'text', i: last + 4 + lenP, p: pt.stop, dy: 4, col: dn, text: `Stop ${fmt(pt.stop)}`});
+        }
+      } else if (pt.entry !== undefined) {
+        const i1 = pt.res ?? Math.min(last, pt.brk + 8);
+        [[pt.entry, acc], [pt.stop, dn], [pt.target, up]].forEach(([v, c2]) => L(pt.brk, v, i1, v, c2, true, 1.2));
+      }
+    });
+    $('#markNote').textContent = 'Chart patterns are drawn through swing points (a swing needs a 2 ATR reversal). Green = bullish, red = bearish, blue = can break either way (triangles, consolidation channels). The faded dotted path is the textbook projection for a pattern still forming: breakout level, then measured target; two paths when either side can break. It shows what the pattern implies, not what will happen. "Reached target" means price hit the target before the stop after the breakout. Patterns are recognised only once their last swing point is confirmed, so nothing here uses future candles.';
+  }
+  const forming = pats.filter(pt => pt.status === 'forming');
+  const done = pats.filter(pt => pt.status === 'target' || pt.status === 'stop');
+  const wins = done.filter(pt => pt.status === 'target').length, other = pats.filter(pt => pt.status === 'other way').length;
+  const cls = pt => pt.dir > 0 ? 'up' : pt.dir < 0 ? 'down' : '';
+  const fT = i => new Date(c[i].time * 1000).toLocaleString([], {timeZone: 'UTC', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
+  const rowsF = forming.map(pt => `<div class="row"><b class="${cls(pt)}">${pt.name}</b><span>forming now</span></div>
+    <div class="row mut" style="background:none;padding-top:0">${pt.bilateral ? `Up: above ${fmt(pt.up.entry)}, target ${fmt(pt.up.target)}. Down: below ${fmt(pt.dn.entry)}, target ${fmt(pt.dn.target)}.` : `Entry ${fmt(pt.entry)}, stop ${fmt(pt.stop)}, target ${fmt(pt.target)}`}</div>`);
+  const tagS = {target: '✓ target', stop: '✗ stop', 'other way': '✗ other way', open: 'open', expired: 'no breakout'};
+  const rowsD = pats.filter(pt => pt.status !== 'forming').slice(-6).reverse().map(pt =>
+    `<div class="row"><b class="${cls(pt)}">${pt.name}</b><span class="mut">${fT(pt.s)}, ${tagS[pt.status]}</span></div>`);
+  $('#cpats').innerHTML = rowsF.concat(rowsD).join('') || '<div class="row mut">No chart pattern in the loaded candles. Try another timeframe.</div>';
+  $('#cpSum').textContent = forming.length ? '' : 'Nothing forming right now.';
+  if (done.length) $('#cpSum').textContent += ` In these ${c.length} candles: ${done.length} breakouts in the expected direction were resolved, ${wins} reached target before stop (${Math.round(100 * wins / done.length)}%). ${other} broke the other way. Small sample.`;
 
   candleS.setMarkers(marks);
   scheduleBoxes();
@@ -430,8 +716,8 @@ async function run() {
     : '<div class="row mut">No patterns found in this range. Try another timeframe.</div>';
 
   $('#stats').innerHTML = Object.entries(s).filter(([, r]) => r.seen).sort((a, b) => b[1].seen - a[1].seen).map(([n, r]) => {
-    const w = r.tested ? Math.round(100 * r.worked / r.tested) : null, m = r.tested ? 100 * r.move / r.tested : null;
-    return `<tr><td class="${PATTERNS[n].dir > 0 ? 'up' : 'down'}">${n}</td><td class="n">${r.seen}</td>
+    const w = r.tested && PATTERNS[n].dir ? Math.round(100 * r.worked / r.tested) : null, m = r.tested ? 100 * r.move / r.tested : null;
+    return `<tr><td class="${PATTERNS[n].dir > 0 ? 'up' : PATTERNS[n].dir < 0 ? 'down' : ''}">${n}${PATTERNS[n].dir ? '' : ' (size of next move)'}</td><td class="n">${r.seen}</td>
       <td class="n">${w === null ? 'n/a' : w + '%'}</td><td class="n ${m > 0 ? 'up' : m < 0 ? 'down' : ''}">${m === null ? 'n/a' : (m > 0 ? '+' : '') + m.toFixed(2) + '%'}</td></tr>`;
   }).join('') || '<tr><td colspan="4" class="mut">No patterns yet.</td></tr>';
 
