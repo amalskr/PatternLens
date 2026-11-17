@@ -302,6 +302,9 @@ def build(df, symbol, interval, null):
             ret3_atr=(c[j] - c[max(0, j - 3)]) / aj, ret12_atr=(c[j] - c[max(0, j - 12)]) / aj,
             rsi=rs[j], vol_ratio=vol_ratio, atr_pct=aj / c[j], wait=j - pt["e"],
             vote_call=vote_call, status=pt["status"], bdir=pt["bdir"],
+            start=df.index[pt["s"]], entry=pt.get("entry"), stop=pt.get("stop"), target=pt.get("target"),
+            up_entry=pt["U"](len(c) - 1) if pt["kind"] == "lines" else None,
+            dn_entry=pt["D"](len(c) - 1) if pt["kind"] == "lines" else None,
             broke_up=np.nan if pt["bdir"] == 0 else int(pt["bdir"] > 0)))
     return rows
 
