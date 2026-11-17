@@ -13,7 +13,7 @@
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--ink);font-family:Sora,"Segoe UI",system-ui,sans-serif;font-variant-numeric:tabular-nums}
 body{padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)}
-.wrap{max-width:1280px;margin:0 auto;padding:20px 18px 40px}
+.wrap{max-width:1600px;margin:0 auto;padding:20px 18px 40px}
 header{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:14px;margin-bottom:16px}
 h1{font-size:22px;font-weight:600;margin:0;letter-spacing:-.01em}
 h1 small{display:block;font-size:13px;font-weight:400;color:var(--muted);margin-top:2px}
@@ -23,7 +23,7 @@ input{width:120px;text-transform:uppercase}
 button{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:500;cursor:pointer}
 button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 label.chk{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)}
-.live{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);min-width:190px}
+.live{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);min-width:300px}
 .live::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--line)}
 .live.on::before{background:var(--up)}
 .live.off::before{background:var(--down)}
@@ -35,6 +35,8 @@ label.chk{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--mut
 .status{font-size:13px;color:var(--muted);margin:10px 2px 0;min-height:18px}
 .status.warn{color:var(--warn)}
 .side{display:flex;flex-direction:column;gap:16px}
+.below{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) minmax(0,1fr);gap:16px;margin-top:16px;align-items:start}
+@media (max-width:1200px){.below{grid-template-columns:1fr}}
 h2{font-size:15px;font-weight:600;margin:0 0 12px}
 .bias-label{font-size:26px;font-weight:600;letter-spacing:-.02em;margin:0}
 .bias-sub{font-size:13px;color:var(--muted);margin:4px 0 14px}
@@ -43,7 +45,7 @@ h2{font-size:15px;font-weight:600;margin:0 0 12px}
 @media (prefers-reduced-motion:reduce){.needle{transition:none}}
 .meter-ends{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:8px}
 ul.reasons{list-style:disc;padding-left:18px;margin:14px 0 0;font-size:13px;line-height:1.6}
-.list{display:flex;flex-direction:column;gap:6px;max-height:260px;overflow:auto}
+.list{display:flex;flex-direction:column;gap:6px;max-height:360px;overflow:auto}
 .row{display:flex;justify-content:space-between;gap:8px;font-size:13px;padding:7px 9px;border-radius:8px;background:var(--soft)}
 .row b{font-weight:500}
 .up{color:var(--up)}.down{color:var(--down)}.mut{color:var(--muted)}
@@ -52,6 +54,11 @@ th,td{text-align:left;padding:7px 4px;border-bottom:1px solid var(--line)}
 th{font-weight:500;color:var(--muted)}
 td.n{text-align:right}th.n{text-align:right}
 .table-wrap{overflow-x:auto}
+table.votes{margin:4px 0 2px;font-size:13px}
+table.votes td{padding:5px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+table.votes td:first-child{width:72px}
+table.votes td:nth-child(2){width:64px;white-space:nowrap;font-weight:500}
+table.votes tr.call td{border-bottom:none;font-weight:600;border-top:2px solid var(--line)}
 .foot{font-size:12px;color:var(--muted);margin-top:18px;line-height:1.6;max-width:80ch}
 </style>
 </head>
@@ -84,6 +91,25 @@ td.n{text-align:right}th.n{text-align:right}
     <div>
       <div class="panel"><div id="chart"></div></div>
       <p class="status" id="status">Loading…</p>
+      <div class="below">
+      <section class="panel" aria-live="polite">
+        <h2>Chart patterns</h2>
+        <div class="list" id="cpats"></div>
+        <p class="bias-sub" id="liveAlert" style="margin:12px 0 0;color:var(--warn)"></p>
+        <p class="bias-sub" id="cpSum" style="margin:12px 0 0"></p>
+      </section>
+      <section class="panel">
+        <h2>Recent patterns</h2>
+        <div class="list" id="recent"></div>
+      </section>
+      <section class="panel">
+        <h2>How each pattern played out here</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Pattern</th><th class="n">Seen</th><th class="n">Worked</th><th class="n">Avg move</th></tr></thead>
+          <tbody id="stats"></tbody>
+        </table></div>
+      </section>
+      </div>
       <p class="status" id="markNote"></p>
     </div>
     <div class="side">
@@ -101,22 +127,6 @@ td.n{text-align:right}th.n{text-align:right}
         <p class="bias-sub" id="mSub"></p>
         <ul class="reasons" id="mInfo"></ul>
       </section>
-      <section class="panel" aria-live="polite">
-        <h2>Chart patterns</h2>
-        <div class="list" id="cpats"></div>
-        <p class="bias-sub" id="cpSum" style="margin:12px 0 0"></p>
-      </section>
-      <section class="panel">
-        <h2>Recent patterns</h2>
-        <div class="list" id="recent"></div>
-      </section>
-      <section class="panel">
-        <h2>How each pattern played out here</h2>
-        <div class="table-wrap"><table>
-          <thead><tr><th>Pattern</th><th class="n">Seen</th><th class="n">Worked</th><th class="n">Avg move</th></tr></thead>
-          <tbody id="stats"></tbody>
-        </table></div>
-      </section>
     </div>
   </div>
 
@@ -127,12 +137,20 @@ td.n{text-align:right}th.n{text-align:right}
 <script>
 const $ = s => document.querySelector(s);
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-let chart, candleS, ema20S, ema50S, timer = null, ws = null, wsKey = '', prec = 4, lastTick = 0, lastPx = null;
+let chart, candleS, ema20S, ema50S, timer = null, ws = null, wsKey = '', prec = 4, lastTick = 0, lastPx = null, candleEnd = 0;
 function setLive(text, state) { const b = $('#liveBadge'); b.textContent = text; b.className = 'live' + (state ? ' ' + state : ''); }
 setInterval(() => {
   if (!lastTick || !ws || ws.readyState !== 1) return;
   const secs = Math.round((Date.now() - lastTick) / 1000);
-  setLive(`Live ${lastPx.toFixed(prec)}, ${secs < 2 ? 'just now' : secs + 's ago'}`, 'on');
+  const al = (lastRun && lastRun.forming || []).map(pt => {
+    const lv = pt.bilateral ? [[1, pt.up.entry], [-1, pt.dn.entry]] : [[pt.dir || 1, pt.entry]];
+    const hit = lv.find(([d, v]) => d > 0 ? lastPx > v : lastPx < v);
+    return hit ? `${pt.name}: the live candle is ${hit[0] > 0 ? 'above' : 'below'} ${hit[1].toFixed(prec)}. A breakout counts only if the candle closes there.` : '';
+  }).filter(Boolean);
+  $('#liveAlert').textContent = al.join(' ');
+  const left = Math.max(0, Math.round((candleEnd - Date.now()) / 1000)), hh = Math.floor(left / 3600);
+  const mmss = `${hh ? hh + ':' : ''}${String(Math.floor(left % 3600 / 60)).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`;
+  setLive(`Live ${lastPx.toFixed(prec)}, ${secs < 2 ? 'just now' : secs + 's ago'}. Candle closes in ${mmss}`, 'on');
 }, 1000);
 // Lightweight Charts draws every timestamp as UTC. Shifting each one by this computer's offset
 // makes the axis, crosshair and day boundaries show local time (Sri Lanka: UTC+5:30).
@@ -263,7 +281,7 @@ function stats(c, found, H) {
   return s;
 }
 
-function bias(c, found, st, e20, e50, rs) {
+function bias(c, found, st, e20, e50, rs, lr) {
   const last = c.length - 1, reasons = []; let score = 0;
   found.filter(f => f.i >= last - 2).forEach(f => {
     const r = st[f.name], ago = last - f.i === 0 ? 'on the last closed candle' : (last - f.i === 1 ? '1 candle ago' : (last - f.i) + ' candles ago');
@@ -271,10 +289,20 @@ function bias(c, found, st, e20, e50, rs) {
       reasons.push(`Doji (indecision) ${ago}${r.tested >= 5 ? `; after a Doji price moved ${(100 * r.move / r.tested).toFixed(2)}% on average, either way` : ''}`);
       return;
     }
+    const row = lr && lr[LR_NAME[f.name]] && lr[LR_NAME[f.name]][e20[f.i] > e50[f.i] ? 'up' : 'down'];
+    if (row && row.n >= 100) {
+      // Long-run evidence decides: a pattern only moves the score if its edge over the base rate was
+      // significant after Holm correction, and in the direction that edge actually went
+      const edge = row.win - row.base, sig = row.p_holm < 0.05;
+      if (sig) score += f.dir * Math.max(-1, Math.min(1, edge * 20));
+      const verdict = !sig ? 'no real edge' : edge > 0 ? 'a real edge' : 'works against the textbook';
+      reasons.push(`${f.name} ${ago}. Full history, ${row.trend}trend: worked ${(100 * row.win).toFixed(1)}% of ${row.n} times vs base ${(100 * row.base).toFixed(1)}%, ${verdict}`);
+      return;
+    }
     let w = 1;
     if (r.tested >= 5) w = Math.max(-1, Math.min(1, (r.worked / r.tested - 0.5) * 4));
     score += f.dir * w;
-    const rate = r.tested >= 5 ? `, worked ${Math.round(100 * r.worked / r.tested)}% of ${r.tested} times here` : ', too few past cases to trust';
+    const rate = r.tested >= 5 ? `, worked ${Math.round(100 * r.worked / r.tested)}% of ${r.tested} times in the loaded candles only (start serve.py with results/ for the full history)` : ', too few past cases to trust';
     reasons.push(`${f.name} ${ago}${rate}`);
   });
   if (e20[last] > e50[last]) { score += 0.5; reasons.push('EMA 20 is above EMA 50, short-term trend is up'); }
@@ -353,7 +381,10 @@ function drawBoxes() {
     } else {
       const x = X(sh.i), y = Y(sh.p);
       if (x === null || y === null) continue;
-      out += `<text x="${x}" y="${y + (sh.dy || 0)}" text-anchor="${sh.anchor || 'start'}" font-size="11" font-weight="600" font-family="Sora, system-ui, sans-serif" fill="${sh.col}">${sh.text}</text>`;
+      const wEst = sh.text.length * 6.6, W = ts.width();
+      let xs = sh.anchor === 'end' ? x - wEst : x;  // left edge of the text
+      xs = Math.max(4, Math.min(xs, W - 4 - wEst));
+      out += `<text x="${xs}" y="${y + (sh.dy || 0)}" text-anchor="start" font-size="11" font-weight="600" font-family="Sora, system-ui, sans-serif" fill="${sh.col}">${sh.text}</text>`;
     }
   }
   for (const b of lastRun.boxes || []) {
@@ -542,7 +573,7 @@ function resolvePattern(pt, c, last) {
     pt.status = 'forming';
     const d = sg || 1, ent = d > 0 ? (upB || pt.N)(last) : (dnB || pt.N)(last);
     pt.entry = ent; pt.stop = stopAt(last, d); pt.target = ent + d * pt.height;
-    if (pt.bilateral) {  // either side can break: keep both plans
+    if (pt.kind === 'lines') {  // a two-line pattern can break either side: keep both plans
       pt.up = {entry: pt.U(last), stop: pt.D(last), target: pt.U(last) + pt.height};
       pt.dn = {entry: pt.D(last), stop: pt.U(last), target: pt.D(last) - pt.height};
     }
@@ -558,6 +589,26 @@ function resolvePattern(pt, c, last) {
     if (hitStop) { pt.status = 'stop'; pt.res = j; break; }  // a candle that touches both counts as a loss
     if (hitTgt) { pt.status = 'target'; pt.res = j; break; }
   }
+}
+
+// One direction call per pattern, from three votes known at candle j (no future candles):
+//   1. the textbook direction of the pattern (none for symmetrical triangles and plain channels)
+//   2. the trend: EMA 20 above or below EMA 50
+//   3. where price sits inside the pattern: upper or lower half of the two lines
+// Ties fall back to the textbook, then the trend. The same rule is scored on every past breakout below.
+function callDirection(pt, j, c, e20, e50) {
+  const tb = pt.dir || 0, tr = e20[j] > e50[j] ? 1 : -1;
+  let pos = 0;
+  if (pt.kind === 'lines') pos = c[j].close > (pt.U(j) + pt.D(j)) / 2 ? 1 : -1;
+  const score = tb + tr + pos, dir = Math.sign(score) || tb || tr;
+  const votes = [tb === dir, tr === dir, pos === dir].filter(Boolean).length, of = (tb ? 1 : 0) + 1 + (pos ? 1 : 0);
+  const why = [tb ? `textbook ${tb > 0 ? 'up' : 'down'}` : 'no textbook direction', `trend ${tr > 0 ? 'up' : 'down'}`]
+    .concat(pos ? [`price in the ${pos > 0 ? 'upper' : 'lower'} half`] : []);
+  const parts = [
+    {k: 'Textbook', v: tb, d: tb ? `${pt.name} is ${tb > 0 ? 'bullish' : 'bearish'}` : `${pt.name} has no direction`},
+    {k: 'Trend', v: tr, d: `EMA 20 is ${tr > 0 ? 'above' : 'below'} EMA 50`},
+    {k: 'Position', v: pos, d: pos ? `price is in the ${pos > 0 ? 'upper' : 'lower'} half of the pattern` : 'not used for this pattern'}];
+  return {dir, votes, of, why, parts};
 }
 
 let lastRun = null;
@@ -627,6 +678,13 @@ function draw(run) {
 
   // Chart patterns: shapes on the chart (in that mode) and the side panel (always)
   const pats = chartPatterns(c), ink = css('--ink'), acc = css('--accent'), fmt = v => v.toFixed(prec);
+  pats.forEach(pt => {
+    if (pt.status === 'forming') pt.call = callDirection(pt, last, c, e20, e50);
+    else if (pt.brk !== null && pt.conf <= last) pt.call = callDirection(pt, pt.conf, c, e20, e50);  // as it looked when recognised
+  });
+  const judged = pats.filter(pt => pt.status !== 'forming' && pt.brk !== null && pt.call);
+  const callRight = judged.filter(pt => pt.call.dir === pt.bdir).length;
+  const tbJudged = judged.filter(pt => pt.dir), tbRight = tbJudged.filter(pt => pt.dir === pt.bdir).length;
   run.shapes = [];
   const hitRate = name => {
     const done = pats.filter(pt => pt.name === name && (pt.status === 'target' || pt.status === 'stop'));
@@ -634,7 +692,10 @@ function draw(run) {
   };
   if (mode === 'patterns') {
     pats.filter(pt => pt.status !== 'expired').forEach(pt => {
-      const col = pt.dir > 0 ? up : pt.dir < 0 ? dn : acc;
+      // Colour = what the textbook expects while the pattern is open or worked; a failed pattern is drawn grey
+      const failed = pt.status === 'stop' || pt.status === 'other way';
+      const side = (pt.status === 'open' || pt.status === 'target') && pt.bdir ? pt.bdir : pt.dir;
+      const col = failed ? css('--muted') : side > 0 ? up : side < 0 ? dn : acc;
       const endI = pt.brk ?? (pt.status === 'forming' ? last + 6 : Math.min(last, pt.e + pt.wait));
       const L = (i1, p1, i2, p2, c2 = col, dash = false, w) => run.shapes.push({t: 'line', i1, p1, i2, p2, col: c2, dash, w});
       if (pt.kind === 'lines') { L(pt.s, pt.U(pt.s), endI, pt.U(endI)); L(pt.s, pt.D(pt.s), endI, pt.D(endI)); }
@@ -644,47 +705,89 @@ function draw(run) {
       }
       let topP = -Infinity;
       for (let j = pt.s; j <= pt.e; j++) topP = Math.max(topP, c[j].high);
-      const tag = {forming: 'forming now', target: '✓ reached target', stop: '✗ hit stop', 'other way': '✗ broke the other way', open: 'open'}[pt.status];
-      run.shapes.push({t: 'text', i: pt.e, p: topP, dy: -10, col, anchor: 'end', text: `${pt.name}: ${tag}`});
+      const exp = !pt.dir ? 'either way' : (pt.dir > 0 ? 'up' : 'down') + (pt.bilateral ? ', can break either way' : ''), went = pt.bdir > 0 ? 'up' : 'down';
+      const tag = {forming: `forming now, textbook: ${exp}`, target: `✓ broke ${went}, reached target`,
+        stop: `✗ broke ${went}, then hit stop`, 'other way': `✗ textbook said ${exp}, it broke ${went}`, open: `broke ${went}, open`}[pt.status];
+      run.shapes.push({t: 'text', i: pt.e, p: topP, dy: -10, col: failed ? dn : col, anchor: 'end', text: `${pt.name}: ${tag}`});
       if (pt.status === 'forming') {
-        // Faded projection: from the last close to the breakout level, then on to the measured target.
-        // Two paths when either side can break (bilateral), the textbook one drawn stronger.
+        // ONE projected path in the called direction; the other side's break level is drawn as the point
+        // where this call is wrong
         const lenP = Math.max(6, Math.round((pt.e - pt.s) * 0.6)), now = c[last].close;
-        const plans = pt.bilateral ? [[1, pt.up], [-1, pt.dn]] : [[pt.dir, {entry: pt.entry, stop: pt.stop, target: pt.target}]];
-        plans.forEach(([d, pl]) => {
-          const c2 = d > 0 ? up : dn, main = !pt.bilateral || d === pt.dir;
-          run.shapes.push({t: 'path', col: c2, op: main ? 0.55 : 0.3, pts: [[last, now], [last + 3, pl.entry], [last + 3 + lenP, pl.target]]});
-          L(last + 1, pl.entry, last + 3 + lenP, pl.entry, acc, true, 1);
-          run.shapes.push({t: 'text', i: last + 4 + lenP, p: pl.target, dy: 4, col: c2, text: `Target ${fmt(pl.target)}${hitRate(pt.name)}`});
-          run.shapes.push({t: 'text', i: last + 4 + lenP, p: pl.entry, dy: 4, col: acc, text: `${d > 0 ? 'Break up' : 'Break down'} ${fmt(pl.entry)}`});
-        });
-        if (!pt.bilateral) {
-          L(last + 1, pt.stop, last + 3 + lenP, pt.stop, dn, true, 1);
-          run.shapes.push({t: 'text', i: last + 4 + lenP, p: pt.stop, dy: 4, col: dn, text: `Stop ${fmt(pt.stop)}`});
-        }
+        const call = pt.call, d = call.dir;
+        const pl = pt.kind === 'lines' ? (d > 0 ? pt.up : pt.dn) : {entry: pt.entry, stop: pt.stop, target: pt.target};
+        const c2 = d > 0 ? up : dn, xe = last + 4 + lenP;
+        run.shapes.push({t: 'path', col: c2, op: 0.75, pts: [[last, now], [last + 3, pl.entry], [last + 3 + lenP, pl.target]]});
+        L(last + 1, pl.entry, last + 3 + lenP, pl.entry, acc, true, 1);
+        L(last + 1, pl.stop, last + 3 + lenP, pl.stop, css('--muted'), true, 1);
+        run.shapes.push({t: 'text', i: xe, p: pl.target, dy: 4, col: c2, text: `Call: ${d > 0 ? 'UP' : 'DOWN'}, target ${fmt(pl.target)}`});
+        const arrow = v => v > 0 ? '▲' : v < 0 ? '▼' : '•';
+        run.shapes.push({t: 'text', i: xe, p: pl.target, dy: d > 0 ? -12 : 20, col: css('--muted'),
+          text: `${call.parts.map(q => `${q.k} ${arrow(q.v)}`).join('   ')}   (${call.votes} of ${call.of})`});
+        run.shapes.push({t: 'text', i: xe, p: pl.entry, dy: 4, col: acc, text: `Confirmed on a close ${d > 0 ? 'above' : 'below'} ${fmt(pl.entry)}`});
+        run.shapes.push({t: 'text', i: xe, p: pl.stop, dy: 4, col: css('--muted'), text: `Call wrong ${d > 0 ? 'below' : 'above'} ${fmt(pl.stop)}`});
+      } else if (pt.status === 'open') {
+        // Broke out and still running: show where it is heading and where it fails
+        const d = pt.bdir, c2 = d > 0 ? up : dn, xe = last + 11;
+        run.shapes.push({t: 'path', col: c2, op: 0.75, pts: [[last, c[last].close], [last + 10, pt.target]]});
+        L(pt.brk, pt.entry, last + 10, pt.entry, acc, true, 1);
+        L(pt.brk, pt.stop, last + 10, pt.stop, css('--muted'), true, 1);
+        L(pt.brk, pt.target, last + 10, pt.target, c2, true, 1);
+        run.shapes.push({t: 'text', i: xe, p: pt.target, dy: 4, col: c2, text: `Target ${fmt(pt.target)}`});
+        run.shapes.push({t: 'text', i: xe, p: pt.entry, dy: 4, col: acc, text: `Broke ${d > 0 ? 'up' : 'down'} at ${fmt(pt.entry)}`});
+        run.shapes.push({t: 'text', i: xe, p: pt.stop, dy: 4, col: css('--muted'), text: `Stop ${fmt(pt.stop)}`});
       } else if (pt.entry !== undefined) {
-        const i1 = pt.res ?? Math.min(last, pt.brk + 8);
+        const i1 = Math.max(pt.res ?? Math.min(last, pt.brk + 8), pt.brk + 3);
         [[pt.entry, acc], [pt.stop, dn], [pt.target, up]].forEach(([v, c2]) => L(pt.brk, v, i1, v, c2, true, 1.2));
       }
     });
-    $('#markNote').textContent = 'Chart patterns are drawn through swing points (a swing needs a 2 ATR reversal). Green = bullish, red = bearish, blue = can break either way (triangles, consolidation channels). The faded dotted path is the textbook projection for a pattern still forming: breakout level, then measured target; two paths when either side can break. It shows what the pattern implies, not what will happen. "Reached target" means price hit the target before the stop after the breakout. Patterns are recognised only once their last swing point is confirmed, so nothing here uses future candles.';
+    $('#markNote').textContent = 'Chart patterns are drawn through swing points (a swing needs a 2 ATR reversal). Green = bullish, red = bearish, blue = can break either way (triangles, consolidation channels). For a pattern still forming, the dotted path is the system’s call: one direction, from the textbook direction, the trend and where price sits inside the pattern. It can be wrong; the grey line marks where it is. The panel shows how often this call rule picked the right side on past breakouts. "Reached target" means price hit the target before the stop after the breakout. Patterns are recognised only once their last swing point is confirmed, so nothing here uses future candles.';
   }
   const forming = pats.filter(pt => pt.status === 'forming');
+  run.forming = forming;
   const done = pats.filter(pt => pt.status === 'target' || pt.status === 'stop');
   const wins = done.filter(pt => pt.status === 'target').length, other = pats.filter(pt => pt.status === 'other way').length;
   const cls = pt => pt.dir > 0 ? 'up' : pt.dir < 0 ? 'down' : '';
   const fT = i => new Date(c[i].time * 1000).toLocaleString([], {timeZone: 'UTC', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
-  const rowsF = forming.map(pt => `<div class="row"><b class="${cls(pt)}">${pt.name}</b><span>forming now</span></div>
-    <div class="row mut" style="background:none;padding-top:0">${pt.bilateral ? `Up: above ${fmt(pt.up.entry)}, target ${fmt(pt.up.target)}. Down: below ${fmt(pt.dn.entry)}, target ${fmt(pt.dn.target)}.` : `Entry ${fmt(pt.entry)}, stop ${fmt(pt.stop)}, target ${fmt(pt.target)}`}</div>`);
+  const rowsF = forming.map(pt => {
+    const k = pt.call, pl = pt.kind === 'lines' ? (k.dir > 0 ? pt.up : pt.dn) : {entry: pt.entry, stop: pt.stop, target: pt.target};
+    return `<div class="row"><b class="${cls(pt)}">${pt.name}</b><span>forming now</span></div>
+    <table class="votes"><tbody>${k.parts.map(q => `<tr><td>${q.k}</td><td class="${q.v > 0 ? 'up' : q.v < 0 ? 'down' : 'mut'}">${q.v > 0 ? '▲ Up' : q.v < 0 ? '▼ Down' : '• None'}</td><td class="mut">${q.d}</td></tr>`).join('')}
+      <tr class="call"><td>Call</td><td class="${k.dir > 0 ? 'up' : 'down'}">${k.dir > 0 ? '▲ UP' : '▼ DOWN'}</td><td>${k.votes} of ${k.of} votes agree</td></tr></tbody></table>
+    <div class="row mut" style="background:none;padding-top:0">Confirmed on a close ${k.dir > 0 ? 'above' : 'below'} ${fmt(pl.entry)}, target ${fmt(pl.target)}, wrong ${k.dir > 0 ? 'below' : 'above'} ${fmt(pl.stop)}.</div>`;
+  });
   const tagS = {target: '✓ target', stop: '✗ stop', 'other way': '✗ other way', open: 'open', expired: 'no breakout'};
-  const rowsD = pats.filter(pt => pt.status !== 'forming').slice(-6).reverse().map(pt =>
+  const rowsD = pats.filter(pt => pt.status !== 'forming' && pt.status !== 'open').slice(-6).reverse().map(pt =>
     `<div class="row"><b class="${cls(pt)}">${pt.name}</b><span class="mut">${fT(pt.s)}, ${tagS[pt.status]}</span></div>`);
-  $('#cpats').innerHTML = rowsF.concat(rowsD).join('') || '<div class="row mut">No chart pattern in the loaded candles. Try another timeframe.</div>';
+  const rowsO = pats.filter(pt => pt.status === 'open').map(pt => {
+    const d = pt.bdir, ok = pt.call ? pt.call.dir === d : null;
+    return `<div class="row"><b class="${d > 0 ? 'up' : 'down'}">${pt.name}</b><span>broke ${d > 0 ? 'up' : 'down'}, running</span></div>
+    <div class="row mut" style="background:none;padding-top:0">Entry ${fmt(pt.entry)}, target ${fmt(pt.target)}, stop ${fmt(pt.stop)}.${ok === null ? '' : ` The call said ${pt.call.dir > 0 ? 'UP' : 'DOWN'}: ${ok ? '✓ right side' : '✗ wrong side'}.`}</div>`;
+  });
+  $('#cpats').innerHTML = rowsF.concat(rowsO, rowsD).join('') || '<div class="row mut">No chart pattern in the loaded candles. Try another timeframe.</div>';
   $('#cpSum').textContent = forming.length ? '' : 'Nothing forming right now.';
+  if (judged.length) $('#cpSum').textContent += ` Track record in these candles: the call picked the breakout side ${callRight} of ${judged.length} times${tbJudged.length ? `; the textbook alone ${tbRight} of ${tbJudged.length}` : ''}.`;
   if (done.length) $('#cpSum').textContent += ` In these ${c.length} candles: ${done.length} breakouts in the expected direction were resolved, ${wins} reached target before stop (${Math.round(100 * wins / done.length)}%). ${other} broke the other way. Small sample.`;
 
   candleS.setMarkers(marks);
   scheduleBoxes();
+}
+
+const LR_NAME = {'Bull engulfing': 'bull_engulf', 'Bear engulfing': 'bear_engulf', 'Hammer': 'hammer',
+  'Shooting star': 'shooting_star', 'Morning star': 'morning_star', 'Evening star': 'evening_star',
+  'Three soldiers': 'three_soldiers', 'Three crows': 'three_crows', 'Double top': 'double_top', 'Double bottom': 'double_bottom'};
+const lrCache = {};
+// Pattern results over the full downloaded history (pattern_stats.py output), if the local server has them
+async function longRunStats(sym, tf, H) {
+  const key = `${sym}_${tf}_${H}`;
+  if (key in lrCache) return lrCache[key];
+  try {
+    const r = await fetch(`http://127.0.0.1:8000/stats?symbol=${encodeURIComponent(sym)}&interval=${tf}&horizon=${H}`);
+    if (!r.ok) throw new Error();
+    const rows = await r.json(), map = {};
+    rows.forEach(x => { (map[x.pattern] = map[x.pattern] || {})[x.trend] = x; });
+    lrCache[key] = map;
+  } catch (e) { lrCache[key] = null; }
+  return lrCache[key];
 }
 
 async function run() {
@@ -698,7 +801,8 @@ async function run() {
   const pf = {priceFormat: {type: 'price', precision: prec, minMove: Math.pow(10, -prec)}};
   [candleS, ema20S, ema50S].forEach(x => x.applyOptions(pf));
   const e20 = ema(closes, 20), e50 = ema(closes, 50), rs = rsi(closes);
-  const found = detect(c, e20), s = stats(c, found, H), b = bias(c, found, s, e20, e50, rs);
+  const lr = demo ? null : await longRunStats(sym, tf, H);
+  const found = detect(c, e20), s = stats(c, found, H), b = bias(c, found, s, e20, e50, rs, lr);
   lastRun = {c, found, e20, e50, live};
   draw(lastRun);
 
@@ -758,14 +862,15 @@ function startLive(sym, tf) {
   if (ws && wsKey === key && ws.readyState <= 1) return;
   stopLive();
   wsKey = key;
-  ws = new WebSocket(`wss://fstream.binance.com/ws/${sym.toLowerCase()}@kline_${tf}`);
+  // Binance moved futures kline streams to the /market route (legacy /ws URLs retired 23 Apr 2026)
+  ws = new WebSocket(`wss://fstream.binance.com/market/stream?streams=${sym.toLowerCase()}@kline_${tf}`);
   setLive('Connecting…', '');
-  ws.onopen = () => setLive('Live, waiting for first tick', 'on');
+  ws.onopen = () => setLive('Connected, waiting for first tick', '');
   ws.onerror = () => setLive('Live feed blocked, updating every minute', 'off');
   ws.onmessage = ev => {
-    const k = JSON.parse(ev.data).k;
+    const msg = JSON.parse(ev.data), k = (msg.data || msg).k;
     if (!k) return;
-    lastTick = Date.now(); lastPx = +k.c;
+    lastTick = Date.now(); lastPx = +k.c; candleEnd = +k.T;  // k.T = this candle's close time (ms)
     candleS.update({time: toChartTime(k.t), open: +k.o, high: +k.h, low: +k.l, close: +k.c});
     scheduleBoxes();
     document.title = `${(+k.c).toFixed(prec)} ${sym} ${tf}: Pattern Lens`;
