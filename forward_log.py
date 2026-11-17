@@ -39,7 +39,7 @@ BASELINE = {"lean_side_random_%": 62.8, "target_random_%": 26.8, "target_researc
 class SqliteStore:
     def __init__(self, path="results/forward_log.sqlite"):
         Path(path).parent.mkdir(exist_ok=True)
-        self.db = sqlite3.connect(path, check_same_thread=False)
+        self.db = sqlite3.connect(path, check_same_thread=False, timeout=15)  # the logger and the server share the file
         self.db.execute("CREATE TABLE IF NOT EXISTS log (key TEXT PRIMARY KEY, data TEXT)")
 
     def get(self, key):
@@ -139,8 +139,9 @@ def summary(store):
         "lean_judged": len(seen_forming), "lean_right": lean_right, "lean_right_%": pct(lean_right, len(seen_forming)),
         "trades_resolved": len(trades), "targets_hit": hits, "target_%": pct(hits, len(trades)),
         "baseline": BASELINE,
-        "recent": d[d.resolved].sort_values("resolved_at", ascending=False).head(8)[
-            ["symbol", "timeframe", "pattern", "status", "bdir", "lean", "resolved_at"]].to_dict("records"),
+        "recent": [] if "resolved_at" not in d or not d.resolved.any() else
+            d[d.resolved].sort_values("resolved_at", ascending=False).head(8)[
+                ["symbol", "timeframe", "pattern", "status", "bdir", "lean", "resolved_at"]].to_dict("records"),
     }
 
 

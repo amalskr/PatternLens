@@ -1023,8 +1023,9 @@ $('#explainBtn').addEventListener('click', explainChart);
 async function forwardLog() {
   const el = $('#flog');
   try {
-    const r = await fetch(`${API}/log/summary`);
-    if (!r.ok) throw new Error();
+    let r;
+    try { r = await fetch(`${API}/log/summary`); } catch (e) { throw new Error('offline'); }
+    if (!r.ok) { el.textContent = `The forward log could not be read (server error ${r.status}). Check the server terminal.`; return; }
     const j = await r.json(), b = j.baseline;
     if (!j.patterns) {
       el.innerHTML = 'Nothing recorded yet. Start the logger: <code>python forward_log.py --loop 900</code> (scans every 15 minutes).';
