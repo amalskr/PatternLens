@@ -80,7 +80,7 @@ def main():
             if n == 0:
                 continue
             base_up = float((fwd[in_regime] > 0).mean())
-            base = base_up if d > 0 else 1 - base_up
+            base = base_up if d > 0 else float((fwd[in_regime] < 0).mean())  # strict, like the win count
             dr = fwd[m] * d
             wins = int((dr > 0).sum())
             tbm = m & tb.notna()
