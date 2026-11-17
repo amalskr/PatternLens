@@ -35,7 +35,7 @@ label.chk{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--mut
 .status{font-size:13px;color:var(--muted);margin:10px 2px 0;min-height:18px}
 .status.warn{color:var(--warn)}
 .side{display:flex;flex-direction:column;gap:16px}
-.below{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) minmax(0,1fr);gap:16px;margin-top:16px;align-items:start}
+.below{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,0.85fr) minmax(0,1.2fr);gap:16px;margin-top:16px;align-items:start}
 @media (max-width:1200px){.below{grid-template-columns:1fr}}
 h2{font-size:15px;font-weight:600;margin:0 0 12px}
 .bias-label{font-size:26px;font-weight:600;letter-spacing:-.02em;margin:0}
@@ -108,6 +108,7 @@ table.votes tr.call td{border-bottom:none;font-weight:600;border-top:2px solid v
           <thead><tr><th>Pattern</th><th class="n">Seen</th><th class="n">Worked</th><th class="n">Avg move</th></tr></thead>
           <tbody id="stats"></tbody>
         </table></div>
+        <p class="bias-sub" style="margin:10px 0 0">* Doji has no direction: its row shows how big the next move was, either way.</p>
       </section>
       </div>
       <p class="status" id="markNote"></p>
@@ -382,6 +383,7 @@ function drawBoxes() {
       const x = X(sh.i), y = Y(sh.p);
       if (x === null || y === null) continue;
       const wEst = sh.text.length * 6.6, W = ts.width();
+      if ((sh.anchor === 'end' && x < 0) || (sh.anchor !== 'end' && x > W)) continue;  // its pattern is off screen
       let xs = sh.anchor === 'end' ? x - wEst : x;  // left edge of the text
       xs = Math.max(4, Math.min(xs, W - 4 - wEst));
       out += `<text x="${xs}" y="${y + (sh.dy || 0)}" text-anchor="start" font-size="11" font-weight="600" font-family="Sora, system-ui, sans-serif" fill="${sh.col}">${sh.text}</text>`;
@@ -576,6 +578,7 @@ function resolvePattern(pt, c, last) {
     if (pt.kind === 'lines') {  // a two-line pattern can break either side: keep both plans
       pt.up = {entry: pt.U(last), stop: pt.D(last), target: pt.U(last) + pt.height};
       pt.dn = {entry: pt.D(last), stop: pt.U(last), target: pt.D(last) - pt.height};
+      if (pt.name === 'Consolidation channel') pt.up.stop = pt.dn.stop = (pt.U(last) + pt.D(last)) / 2;
     }
     return;
   }
@@ -583,12 +586,14 @@ function resolvePattern(pt, c, last) {
   const d = pt.bdir, ent = c[pt.brk].close;
   pt.entry = ent; pt.stop = stopAt(pt.brk, d); pt.target = ent + d * pt.height;
   pt.status = 'open';
-  for (let j = pt.brk + 1; j <= Math.min(last, pt.brk + 3 * Math.max(len, 10)); j++) {
+  const endScan = pt.brk + 3 * Math.max(len, 10);  // give the trade three pattern lengths to resolve
+  for (let j = pt.brk + 1; j <= Math.min(last, endScan); j++) {
     const hitStop = d > 0 ? c[j].low <= pt.stop : c[j].high >= pt.stop;
     const hitTgt = d > 0 ? c[j].high >= pt.target : c[j].low <= pt.target;
     if (hitStop) { pt.status = 'stop'; pt.res = j; break; }  // a candle that touches both counts as a loss
     if (hitTgt) { pt.status = 'target'; pt.res = j; break; }
   }
+  if (pt.status === 'open' && endScan < last) pt.status = 'timeout';  // ran out of time: neither target nor stop
 }
 
 // One direction call per pattern, from three votes known at candle j (no future candles):
@@ -707,24 +712,45 @@ function draw(run) {
       for (let j = pt.s; j <= pt.e; j++) topP = Math.max(topP, c[j].high);
       const exp = !pt.dir ? 'either way' : (pt.dir > 0 ? 'up' : 'down') + (pt.bilateral ? ', can break either way' : ''), went = pt.bdir > 0 ? 'up' : 'down';
       const tag = {forming: `forming now, textbook: ${exp}`, target: `✓ broke ${went}, reached target`,
-        stop: `✗ broke ${went}, then hit stop`, 'other way': `✗ textbook said ${exp}, it broke ${went}`, open: `broke ${went}, open`}[pt.status];
+        stop: `✗ broke ${went}, then hit stop`, 'other way': `✗ textbook said ${exp}, it broke ${went}`, open: `broke ${went}, running now`,
+        timeout: `broke ${went}, no result in time`}[pt.status];
       run.shapes.push({t: 'text', i: pt.e, p: topP, dy: -10, col: failed ? dn : col, anchor: 'end', text: `${pt.name}: ${tag}`});
       if (pt.status === 'forming') {
-        // ONE projected path in the called direction; the other side's break level is drawn as the point
-        // where this call is wrong
         const lenP = Math.max(6, Math.round((pt.e - pt.s) * 0.6)), now = c[last].close;
-        const call = pt.call, d = call.dir;
-        const pl = pt.kind === 'lines' ? (d > 0 ? pt.up : pt.dn) : {entry: pt.entry, stop: pt.stop, target: pt.target};
-        const c2 = d > 0 ? up : dn, xe = last + 4 + lenP;
-        run.shapes.push({t: 'path', col: c2, op: 0.75, pts: [[last, now], [last + 3, pl.entry], [last + 3 + lenP, pl.target]]});
-        L(last + 1, pl.entry, last + 3 + lenP, pl.entry, acc, true, 1);
-        L(last + 1, pl.stop, last + 3 + lenP, pl.stop, css('--muted'), true, 1);
-        run.shapes.push({t: 'text', i: xe, p: pl.target, dy: 4, col: c2, text: `Call: ${d > 0 ? 'UP' : 'DOWN'}, target ${fmt(pl.target)}`});
+        const call = pt.call, d = call.dir, xe = last + 4 + lenP;
         const arrow = v => v > 0 ? '▲' : v < 0 ? '▼' : '•';
-        run.shapes.push({t: 'text', i: xe, p: pl.target, dy: d > 0 ? -12 : 20, col: css('--muted'),
-          text: `${call.parts.map(q => `${q.k} ${arrow(q.v)}`).join('   ')}   (${call.votes} of ${call.of})`});
-        run.shapes.push({t: 'text', i: xe, p: pl.entry, dy: 4, col: acc, text: `Confirmed on a close ${d > 0 ? 'above' : 'below'} ${fmt(pl.entry)}`});
-        run.shapes.push({t: 'text', i: xe, p: pl.stop, dy: 4, col: css('--muted'), text: `Call wrong ${d > 0 ? 'below' : 'above'} ${fmt(pl.stop)}`});
+        const voteLine = `${call.parts.map(q => `${q.k} ${arrow(q.v)}`).join('   ')}   (${call.votes} of ${call.of})`;
+        if (!pt.dir && pt.kind === 'lines') {
+          // Indecisive pattern (symmetrical triangle, consolidation channel): like the Binance cheat sheet,
+          // both sides get a plan. The side the call favours is drawn strong, the other faint.
+          const chan = pt.name === 'Consolidation channel';
+          [[1, pt.up], [-1, pt.dn]].forEach(([s2, pl]) => {
+            const c2 = s2 > 0 ? up : dn, main = s2 === d;
+            run.shapes.push({t: 'path', col: c2, op: main ? 0.75 : 0.3, pts: [[last, now], [last + 3, pl.entry], [last + 3 + lenP, pl.target]]});
+            L(last + 1, pl.entry, last + 3 + lenP, pl.entry, c2, true, 1);
+            L(last + 1, pl.target, last + 3 + lenP, pl.target, c2, true, 1);
+            run.shapes.push({t: 'text', i: xe, p: pl.target, dy: 4, col: c2, text: `${s2 > 0 ? 'Buy' : 'Short'} target ${fmt(pl.target)}${main ? '  ← call' : ''}`});
+            run.shapes.push({t: 'text', i: xe, p: pl.entry, dy: 4, col: c2,
+              text: chan ? `${s2 > 0 ? 'Buy above' : 'Short below'} ${fmt(pl.entry)}` : `${s2 > 0 ? 'Buy above, short stop' : 'Short below, buy stop'} ${fmt(pl.entry)}`});
+          });
+          if (chan) {  // both stops sit at the middle of the channel
+            L(last + 1, pt.up.stop, last + 3 + lenP, pt.up.stop, css('--muted'), true, 1);
+            run.shapes.push({t: 'text', i: xe, p: pt.up.stop, dy: 4, col: css('--muted'), text: `Stop for either side ${fmt(pt.up.stop)}`});
+          }
+          const tl = d > 0 ? pt.up.target : pt.dn.target;
+          run.shapes.push({t: 'text', i: xe, p: tl, dy: d > 0 ? -12 : 20, col: css('--muted'), text: voteLine});
+        } else {
+          // ONE projected path in the called direction; the other side's break level is where the call is wrong
+          const pl = pt.kind === 'lines' ? (d > 0 ? pt.up : pt.dn) : {entry: pt.entry, stop: pt.stop, target: pt.target};
+          const c2 = d > 0 ? up : dn;
+          run.shapes.push({t: 'path', col: c2, op: 0.75, pts: [[last, now], [last + 3, pl.entry], [last + 3 + lenP, pl.target]]});
+          L(last + 1, pl.entry, last + 3 + lenP, pl.entry, acc, true, 1);
+          L(last + 1, pl.stop, last + 3 + lenP, pl.stop, css('--muted'), true, 1);
+          run.shapes.push({t: 'text', i: xe, p: pl.target, dy: 4, col: c2, text: `Call: ${d > 0 ? 'UP' : 'DOWN'}, target ${fmt(pl.target)}`});
+          run.shapes.push({t: 'text', i: xe, p: pl.target, dy: d > 0 ? -12 : 20, col: css('--muted'), text: voteLine});
+          run.shapes.push({t: 'text', i: xe, p: pl.entry, dy: 4, col: acc, text: `Confirmed on a close ${d > 0 ? 'above' : 'below'} ${fmt(pl.entry)}`});
+          run.shapes.push({t: 'text', i: xe, p: pl.stop, dy: 4, col: css('--muted'), text: `Call wrong ${d > 0 ? 'below' : 'above'} ${fmt(pl.stop)}`});
+        }
       } else if (pt.status === 'open') {
         // Broke out and still running: show where it is heading and where it fails
         const d = pt.bdir, c2 = d > 0 ? up : dn, xe = last + 11;
@@ -740,7 +766,7 @@ function draw(run) {
         [[pt.entry, acc], [pt.stop, dn], [pt.target, up]].forEach(([v, c2]) => L(pt.brk, v, i1, v, c2, true, 1.2));
       }
     });
-    $('#markNote').textContent = 'Chart patterns are drawn through swing points (a swing needs a 2 ATR reversal). Green = bullish, red = bearish, blue = can break either way (triangles, consolidation channels). For a pattern still forming, the dotted path is the system’s call: one direction, from the textbook direction, the trend and where price sits inside the pattern. It can be wrong; the grey line marks where it is. The panel shows how often this call rule picked the right side on past breakouts. "Reached target" means price hit the target before the stop after the breakout. Patterns are recognised only once their last swing point is confirmed, so nothing here uses future candles.';
+    $('#markNote').textContent = 'Chart patterns are drawn through swing points (a swing needs a 2 ATR reversal). Green = bullish, red = bearish, blue = can break either way (triangles, consolidation channels). For a pattern still forming, the dotted path is the system’s call: one direction, from the textbook direction, the trend and where price sits inside the pattern. It can be wrong; the grey line marks where it is. Indecisive patterns (symmetrical triangle, consolidation channel) show both sides as on the Binance cheat sheet, the called side drawn stronger. The panel shows how often this call rule picked the right side on past breakouts. "Reached target" means price hit the target before the stop after the breakout. Patterns are recognised only once their last swing point is confirmed, so nothing here uses future candles.';
   }
   const forming = pats.filter(pt => pt.status === 'forming');
   run.forming = forming;
@@ -753,15 +779,18 @@ function draw(run) {
     return `<div class="row"><b class="${cls(pt)}">${pt.name}</b><span>forming now</span></div>
     <table class="votes"><tbody>${k.parts.map(q => `<tr><td>${q.k}</td><td class="${q.v > 0 ? 'up' : q.v < 0 ? 'down' : 'mut'}">${q.v > 0 ? '▲ Up' : q.v < 0 ? '▼ Down' : '• None'}</td><td class="mut">${q.d}</td></tr>`).join('')}
       <tr class="call"><td>Call</td><td class="${k.dir > 0 ? 'up' : 'down'}">${k.dir > 0 ? '▲ UP' : '▼ DOWN'}</td><td>${k.votes} of ${k.of} votes agree</td></tr></tbody></table>
-    <div class="row mut" style="background:none;padding-top:0">Confirmed on a close ${k.dir > 0 ? 'above' : 'below'} ${fmt(pl.entry)}, target ${fmt(pl.target)}, wrong ${k.dir > 0 ? 'below' : 'above'} ${fmt(pl.stop)}.</div>`;
+    <div class="row mut" style="background:none;padding-top:0">${!pt.dir && pt.kind === 'lines'
+      ? `Indecisive: either side can win. Buy above ${fmt(pt.up.entry)}, target ${fmt(pt.up.target)}. Short below ${fmt(pt.dn.entry)}, target ${fmt(pt.dn.target)}. The call favours ${k.dir > 0 ? 'the buy' : 'the short'}.`
+      : `Confirmed on a close ${k.dir > 0 ? 'above' : 'below'} ${fmt(pl.entry)}, target ${fmt(pl.target)}, wrong ${k.dir > 0 ? 'below' : 'above'} ${fmt(pl.stop)}.`}</div>`;
   });
-  const tagS = {target: '✓ target', stop: '✗ stop', 'other way': '✗ other way', open: 'open', expired: 'no breakout'};
+  const tagS = {target: '✓ target', stop: '✗ stop', 'other way': '✗ other way', open: 'running', expired: 'no breakout', timeout: 'no result in time'};
   const rowsD = pats.filter(pt => pt.status !== 'forming' && pt.status !== 'open').slice(-6).reverse().map(pt =>
     `<div class="row"><b class="${cls(pt)}">${pt.name}</b><span class="mut">${fT(pt.s)}, ${tagS[pt.status]}</span></div>`);
   const rowsO = pats.filter(pt => pt.status === 'open').map(pt => {
-    const d = pt.bdir, ok = pt.call ? pt.call.dir === d : null;
+    const d = pt.bdir, ok = pt.call ? pt.call.dir === d : null, px = run.live ? run.live.close : c[last].close;
+    const back = d > 0 ? px < pt.entry : px > pt.entry;
     return `<div class="row"><b class="${d > 0 ? 'up' : 'down'}">${pt.name}</b><span>broke ${d > 0 ? 'up' : 'down'}, running</span></div>
-    <div class="row mut" style="background:none;padding-top:0">Entry ${fmt(pt.entry)}, target ${fmt(pt.target)}, stop ${fmt(pt.stop)}.${ok === null ? '' : ` The call said ${pt.call.dir > 0 ? 'UP' : 'DOWN'}: ${ok ? '✓ right side' : '✗ wrong side'}.`}</div>`;
+    <div class="row mut" style="background:none;padding-top:0">Entry ${fmt(pt.entry)}, target ${fmt(pt.target)}, stop ${fmt(pt.stop)}.${ok === null ? '' : ` The call said ${pt.call.dir > 0 ? 'UP' : 'DOWN'}: ${ok ? '✓ right side' : '✗ wrong side'}.`}${back ? ` <span style="color:var(--warn)">Price ${fmt(px)} is back ${d > 0 ? 'below' : 'above'} the breakout level: a retest, or a false break if it reaches the stop.</span>` : ''}</div>`;
   });
   $('#cpats').innerHTML = rowsF.concat(rowsO, rowsD).join('') || '<div class="row mut">No chart pattern in the loaded candles. Try another timeframe.</div>';
   $('#cpSum').textContent = forming.length ? '' : 'Nothing forming right now.';
@@ -816,12 +845,12 @@ async function run() {
   const fmtT = t => new Date(t * 1000).toLocaleString([], {timeZone: 'UTC', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
   const recent = found.slice(-12).reverse();
   $('#recent').innerHTML = recent.length ? recent.map(f =>
-    `<div class="row"><b class="${f.dir > 0 ? 'up' : 'down'}">${f.name}</b><span class="mut">${fmtT(c[f.i].time)}</span></div>`).join('')
+    `<div class="row"><b class="${f.dir > 0 ? 'up' : f.dir < 0 ? 'down' : ''}">${f.name}</b><span class="mut">${fmtT(c[f.i].time)}</span></div>`).join('')
     : '<div class="row mut">No patterns found in this range. Try another timeframe.</div>';
 
   $('#stats').innerHTML = Object.entries(s).filter(([, r]) => r.seen).sort((a, b) => b[1].seen - a[1].seen).map(([n, r]) => {
     const w = r.tested && PATTERNS[n].dir ? Math.round(100 * r.worked / r.tested) : null, m = r.tested ? 100 * r.move / r.tested : null;
-    return `<tr><td class="${PATTERNS[n].dir > 0 ? 'up' : PATTERNS[n].dir < 0 ? 'down' : ''}">${n}${PATTERNS[n].dir ? '' : ' (size of next move)'}</td><td class="n">${r.seen}</td>
+    return `<tr><td class="${PATTERNS[n].dir > 0 ? 'up' : PATTERNS[n].dir < 0 ? 'down' : ''}">${n}${PATTERNS[n].dir ? '' : '*'}</td><td class="n">${r.seen}</td>
       <td class="n">${w === null ? 'n/a' : w + '%'}</td><td class="n ${m > 0 ? 'up' : m < 0 ? 'down' : ''}">${m === null ? 'n/a' : (m > 0 ? '+' : '') + m.toFixed(2) + '%'}</td></tr>`;
   }).join('') || '<tr><td colspan="4" class="mut">No patterns yet.</td></tr>';
 
@@ -839,12 +868,21 @@ async function modelSignal(sym, tf) {
     if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
     L.textContent = j.signal === 'NO TRADE' ? 'No trade' : j.signal;
     L.className = 'bias-label ' + (j.signal === 'BUY' ? 'up' : j.signal === 'SELL' ? 'down' : '');
-    S.textContent = `P(up) ${pct(j.prob_up)}: chance of +${j.k} ATR before −${j.k} ATR within ${j.horizon} candles`;
+    // Say the probability in prices and hours instead of ATRs and candles
+    const cs = lastRun ? lastRun.c : null, mins = {'15m': 15, '1h': 60, '4h': 240}[tf] * j.horizon;
+    const span = mins < 120 ? `${mins} minutes` : `${mins / 60} hours`;
+    if (cs) {
+      const now = cs.at(-1).close, step = j.k * atrArr(cs).at(-1), hi = now + step, lo = now - step;
+      S.innerHTML = `Next ${span}: <b class="up">${pct(j.prob_up)}</b> chance price reaches <b>${hi.toFixed(prec)}</b> first, `
+        + `<b class="down">${pct(1 - j.prob_up)}</b> chance it drops to <b>${lo.toFixed(prec)}</b> first `
+        + `(from ${now.toFixed(prec)}, a normal move of ${step.toFixed(prec)} either way). `
+        + `It says BUY only at ${pct(j.up)} or more, SELL at ${pct(j.dn)} or less.`;
+    } else S.textContent = `Chance price rises ${j.k} ATR before it falls ${j.k} ATR in the next ${j.horizon} candles: ${pct(j.prob_up)}`;
     const cv = j.cv, items = [
-      `Walk-forward AUC ${cv.auc.toFixed(3)} (0.500 is a coin flip)`,
-      `BUY was right ${pct(cv.buy_precision)} of the time, base rate ${pct(cv.base_up_rate)}`,
-      `SELL was right ${pct(cv.sell_precision)} of the time, base rate ${pct(1 - cv.base_up_rate)}`];
-    if (j.holdout) items.push(`Hold-out AUC ${j.holdout.auc.toFixed(3)} on data the model never saw`);
+      `How good is it? Test score ${cv.auc.toFixed(3)}, where 0.500 means no better than a coin flip and 1.000 means perfect.`,
+      `When it said BUY in testing, price rose first ${pct(cv.buy_precision)} of the time. Without the model that happens ${pct(cv.base_up_rate)} of the time.`,
+      `When it said SELL in testing, price fell first ${pct(cv.sell_precision)} of the time. Without the model that happens ${pct(1 - cv.base_up_rate)} of the time.`];
+    if (j.holdout) items.push(`On the last 6 months, which it never saw while learning: test score ${j.holdout.auc.toFixed(3)}.`);
     I.innerHTML = items.map(x => `<li>${x}</li>`).join('');
   } catch (e) {
     L.textContent = 'Not connected'; L.className = 'bias-label';
