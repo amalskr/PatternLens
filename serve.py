@@ -127,78 +127,6 @@ def patterns(req: Candles):
     }
 
 
-# ---------- AI analyst ----------
-ANALYST_RULES = """You explain a crypto chart to a beginner, using ONLY the facts in the JSON you are given.
-Rules:
-- Do not forecast prices and do not tell the reader to buy or sell.
-- For any chart pattern, say how often its textbook target was reached before the stop in past data,
-  and compare it with the same number on random (shuffled) data. If the two are close, say plainly that
-  the pattern showed no real edge.
-- If the facts say a model or rule has no edge over random data, say so in plain words.
-- Mention the levels that matter right now (breakout level, stop, target) as plain prices.
-- At most 130 words, short sentences, no jargon (say "average move size" instead of ATR).
-- Write in {lang}.
-- End with one short line saying this is not financial advice."""
-_CACHE = {}
-
-
-class Explain(BaseModel):
-    lang: str  # "si" or "en"
-    facts: dict
-
-
-import re
-
-# Scripts a Sinhala answer must not contain: Devanagari, Hebrew, Arabic, CJK, Japanese kana
-_FOREIGN = re.compile(r"[\u0590-\u06FF\u0900-\u097F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]")
-
-
-def _ask(system, user):
-    if os.environ.get("ANTHROPIC_API_KEY"):  # paid, better Sinhala
-        r = requests.post("https://api.anthropic.com/v1/messages", timeout=60, headers={
-            "x-api-key": os.environ["ANTHROPIC_API_KEY"], "anthropic-version": "2023-06-01",
-            "content-type": "application/json"}, json={
-            "model": os.environ.get("ANALYST_MODEL", "claude-haiku-5-5"), "max_tokens": 600,
-            "system": system, "messages": [{"role": "user", "content": user}]})
-        r.raise_for_status()
-        return "".join(b.get("text", "") for b in r.json()["content"]), "Claude API"
-    model = os.environ.get("OLLAMA_MODEL")  # free, runs on this computer
-    if not model:  # use whichever model is installed in Ollama
-        tags = requests.get("http://localhost:11434/api/tags", timeout=5).json().get("models", [])
-        if not tags:
-            raise RuntimeError("Ollama has no model installed")
-        model = tags[0]["name"]
-    r = requests.post("http://localhost:11434/api/chat", timeout=180, json={
-        "model": model, "stream": False,
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]})
-    r.raise_for_status()
-    return r.json()["message"]["content"], f"Ollama {model} (local)"
-
-
-@app.post("/explain")
-def explain(req: Explain):
-    key = json.dumps([req.lang, req.facts], sort_keys=True)
-    if key in _CACHE:
-        return _CACHE[key]
-    lang = "Sinhala (සිංහල), with crypto and pattern names left in English" if req.lang == "si" else "English"
-    system = ANALYST_RULES.format(lang=lang)
-    user = "Facts:\n" + json.dumps(req.facts, indent=1, ensure_ascii=False)
-    note = ""
-    try:
-        text, engine = _ask(system, user)
-        if req.lang == "si" and (_FOREIGN.search(text) or len(re.findall(r"[\u0D80-\u0DFF]", text)) < 40):
-            # The model wrote other scripts or hardly any Sinhala: do not show it, fall back to English
-            text, engine = _ask(ANALYST_RULES.format(lang="English"), user)
-            note = "The Sinhala answer failed a quality check (wrong script), so this one is in English. "
-    except Exception as e:
-        raise HTTPException(503, "No AI engine reachable. Free option: install Ollama and run "
-                                 "'ollama pull qwen2.5:7b'. Paid option: set ANTHROPIC_API_KEY before starting the server. "
-                                 f"({type(e).__name__})")
-    out = {"text": text.strip(), "engine": engine, "note": note}
-    _CACHE[key] = out
-    return out
-
-
 # ---------- Forward log ----------
 from fastapi import Header
 
@@ -224,9 +152,18 @@ def log_scan(x_scan_token: str | None = Header(default=None)):
     return res
 
 
+_SUMMARY = {"at": 0.0, "value": None}
+
+
 @app.get("/log/summary")
 def log_summary():
-    return json.loads(json.dumps(forward_log.summary(store()), default=str))
+    """Reading the summary reads every logged pattern, so it is rebuilt at most every 5 minutes
+    (keeps Firestore reads, and cost, low when the page refreshes every minute)."""
+    import time
+    if _SUMMARY["value"] is None or time.time() - _SUMMARY["at"] > 300:
+        _SUMMARY["value"] = json.loads(json.dumps(forward_log.summary(store()), default=str))
+        _SUMMARY["at"] = time.time()
+    return _SUMMARY["value"]
 
 
 # ---------- Prediction from the page's own candles (no Binance call from the server) ----------
@@ -254,4 +191,32 @@ async def strip_api_prefix(request, call_next):
     path = request.scope["path"]
     if path == "/api" or path.startswith("/api/"):
         request.scope["path"] = path[4:] or "/"
+    return await call_next(request)
+
+
+# ---------- Self-hosting: serve the page and protect everything with one password ----------
+import base64
+import secrets
+
+from fastapi.responses import FileResponse, Response
+
+
+@app.get("/", include_in_schema=False)
+def page():
+    return FileResponse("pattern-lens.html")
+
+
+@app.middleware("http")
+async def password(request, call_next):
+    """If PAGE_PASSWORD is set, the browser asks for it once (any user name); nothing else changes."""
+    pw = os.environ.get("PAGE_PASSWORD")
+    if pw and request.method != "OPTIONS":
+        ok, h = False, request.headers.get("authorization", "")
+        if h.startswith("Basic "):
+            try:
+                ok = secrets.compare_digest(base64.b64decode(h[6:]).decode().partition(":")[2], pw)
+            except Exception:
+                ok = False
+        if not ok:
+            return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Pattern Lens"'})
     return await call_next(request)

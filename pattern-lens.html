@@ -68,7 +68,7 @@ table.votes tr.call td{border-bottom:none;font-weight:600;border-top:2px solid v
 <body>
 <div class="wrap">
   <header>
-    <h1>Pattern Lens<small>Candlestick and chart patterns on Binance Futures, with how each one actually played out. <span class="ai-tag" style="margin-left:0"><svg class="ai-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2.5l1.9 5.6 5.6 1.9-5.6 1.9L10 17.5l-1.9-5.6-5.6-1.9 5.6-1.9z"/><path d="M18.5 13l.95 2.55L22 16.5l-2.55.95-.95 2.55-.95-2.55L15 16.5l2.55-.95z"/></svg>AI</span> marks what a machine learning or language model made; everything else is rules and statistics.</small></h1>
+    <h1>Pattern Lens<small>Candlestick and chart patterns on Binance Futures, with how each one actually played out. <span class="ai-tag" style="margin-left:0"><svg class="ai-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2.5l1.9 5.6 5.6 1.9-5.6 1.9L10 17.5l-1.9-5.6-5.6-1.9 5.6-1.9z"/><path d="M18.5 13l.95 2.55L22 16.5l-2.55.95-.95 2.55-.95-2.55L15 16.5l2.55-.95z"/></svg>AI</span> marks what a machine learning model made; everything else is rules and statistics.</small></h1>
     <div class="controls">
       <input id="sym" value="ADAUSDT" aria-label="Symbol" spellcheck="false">
       <select id="tf" aria-label="Timeframe">
@@ -130,14 +130,6 @@ table.votes tr.call td{border-bottom:none;font-weight:600;border-top:2px solid v
         <p class="bias-label" id="mLabel">…</p>
         <p class="bias-sub" id="mSub"></p>
         <ul class="reasons" id="mInfo"></ul>
-      </section>
-      <section class="panel" aria-live="polite">
-        <h2 title="Written by a language model">AI analyst<span class="ai-tag"><svg class="ai-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2.5l1.9 5.6 5.6 1.9-5.6 1.9L10 17.5l-1.9-5.6-5.6-1.9 5.6-1.9z"/><path d="M18.5 13l.95 2.55L22 16.5l-2.55.95-.95 2.55-.95-2.55L15 16.5l2.55-.95z"/></svg>AI</span></h2>
-        <div class="controls" style="margin-bottom:12px">
-          <button id="explainBtn">Explain this chart</button>
-        </div>
-        <div id="aiText" class="bias-sub" style="white-space:pre-wrap;color:var(--ink);line-height:1.65">Press the button for a plain-language summary of what this chart shows, using the research numbers.</div>
-        <p class="bias-sub" id="aiEngine" style="margin-top:10px"></p>
       </section>
       <section class="panel" aria-live="polite">
         <h2>Forward log</h2>
@@ -968,59 +960,6 @@ function startLive(sym, tf) {
   };
 }
 
-// ---------- AI analyst: the facts on this page, explained in plain words by a language model ----------
-function analystFacts() {
-  const run = lastRun;
-  if (!run) return null;
-  const c = run.c, last = c.length - 1, e20 = run.e20, e50 = run.e50, f = v => +v.toFixed(prec);
-  const st = name => {
-    const x = run.srv && run.srv.stats && run.srv.stats[name];
-    return x ? {past_breakouts: x.n, target_reached_before_stop_real: `${Math.round(100 * x.target_real)}%`,
-      same_on_random_data: `${Math.round(100 * x.target_null)}%`} : 'no full-history numbers available';
-  };
-  const pats = (run.pats || []).filter(pt => pt.status === 'forming' || pt.status === 'open').map(pt => {
-    const o = {name: pt.name, textbook_direction: pt.dir > 0 ? 'up' : pt.dir < 0 ? 'down' : 'none (either side)', history: st(pt.name)};
-    if (pt.status === 'forming') {
-      o.status = 'still forming, no breakout yet';
-      if (pt.kind === 'lines') { o.break_up_above = f(pt.up.entry); o.break_down_below = f(pt.dn.entry); o.target_if_up = f(pt.up.target); o.target_if_down = f(pt.dn.target); }
-      else { o.breakout_level = f(pt.entry); o.stop = f(pt.stop); o.target = f(pt.target); }
-      if (pt.call) o.lean = `${pt.call.dir > 0 ? 'up' : 'down'} (${pt.call.why.join(', ')}); research shows this lean has no edge over random data`;
-    } else {
-      o.status = `broke ${pt.bdir > 0 ? 'up' : 'down'} and is still running`;
-      Object.assign(o, {broke_at: f(pt.entry), stop: f(pt.stop), target: f(pt.target)});
-    }
-    return o;
-  });
-  const findings = [
-    'Over 6 years and 13 coins, textbook candlestick patterns showed no edge in their textbook direction after fees.',
-    'Three black crows were followed by a small bounce more often than not (about 54% vs 50%), the opposite of the textbook; downtrend three white soldiers faded (about 47% vs 51%). Small effects, thin after fees.',
-    'After a chart pattern breakout, the textbook target was reached before the stop only about 28% of the time, close to the 27% seen on random data.'];
-  if (run.srv && run.srv.model) findings.push(`A trained model guessed the breakout side right ${run.srv.model.real.toFixed(0)}% of the time on real charts and ${run.srv.model.shuffled.toFixed(0)}% on random ones: no real edge.`);
-  return {
-    symbol: run.sym, timeframe: run.tf, last_closed_candle_price: f(c[last].close),
-    trend: e20[last] > e50[last] ? 'short-term trend up (EMA 20 above EMA 50)' : 'short-term trend down (EMA 20 below EMA 50)',
-    candlestick_notes: [...document.querySelectorAll('#reasons li')].map(li => li.textContent),
-    chart_patterns_now: pats.length ? pats : 'none forming or running',
-    model_signal: $('#mSub').textContent,
-    research_findings: findings};
-}
-async function explainChart() {
-  const out = $('#aiText'), eng = $('#aiEngine'), facts = analystFacts();
-  if (!facts) { out.textContent = 'Load a chart first.'; return; }
-  out.textContent = 'Writing… a local model can take up to a minute.';
-  eng.textContent = '';
-  try {
-    const r = await fetch(`${API}/explain`, {method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({lang: 'en', facts})});
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.detail || 'HTTP ' + r.status);
-    out.textContent = j.text;
-    eng.textContent = `${j.note || ''}Written by ${j.engine} from the numbers on this page. It can make mistakes; the numbers are the source.`;
-  } catch (e) {
-    out.textContent = /No AI engine/.test(e.message) ? e.message : 'Start the local server first: uvicorn serve:app --port 8000';
-  }
-}
-$('#explainBtn').addEventListener('click', explainChart);
 
 // ---------- Forward log: patterns recorded live, before their outcome ----------
 async function forwardLog() {

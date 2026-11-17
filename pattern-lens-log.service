@@ -1,0 +1,15 @@
+[Unit]
+Description=Pattern Lens forward log and Telegram alerts
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/PatternLens
+EnvironmentFile=/home/ubuntu/PatternLens/pl.env
+ExecStart=/home/ubuntu/PatternLens/.venv/bin/python forward_log.py --loop 300
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
