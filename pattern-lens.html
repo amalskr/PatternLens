@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pattern Lens: candlestick pattern scanner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#eef1f4;--card:#ffffff;--ink:#14202b;--muted:#5d6b78;--line:#dbe1e7;--up:#0e7c66;--down:#c2413b;--accent:#4153c7;--soft:#f5f7f9;--warn:#9a6400;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1720;--card:#16212c;--ink:#e6ecf1;--muted:#93a3b2;--line:#253341;--up:#34c39c;--down:#ef6f67;--accent:#8e9cf5;--soft:#1b2834;--warn:#e3a94a;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0f1720;--card:#16212c;--ink:#e6ecf1;--muted:#93a3b2;--line:#253341;--up:#34c39c;--down:#ef6f67;--accent:#8e9cf5;--soft:#1b2834;--warn:#e3a94a;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:Sora,"Segoe UI",system-ui,sans-serif;font-variant-numeric:tabular-nums}
+body{padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)}
+.wrap{max-width:1280px;margin:0 auto;padding:20px 18px 40px}
+header{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:14px;margin-bottom:16px}
+h1{font-size:22px;font-weight:600;margin:0;letter-spacing:-.01em}
+h1 small{display:block;font-size:13px;font-weight:400;color:var(--muted);margin-top:2px}
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+input,select,button{font:inherit;font-size:14px;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+input{width:120px;text-transform:uppercase}
+button{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:500;cursor:pointer}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+label.chk{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px}
+@media (max-width:900px){.grid{grid-template-columns:1fr}}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+#chart{height:560px;width:100%}
+@media (max-width:600px){#chart{height:420px}}
+.status{font-size:13px;color:var(--muted);margin:10px 2px 0;min-height:18px}
+.status.warn{color:var(--warn)}
+.side{display:flex;flex-direction:column;gap:16px}
+h2{font-size:15px;font-weight:600;margin:0 0 12px}
+.bias-label{font-size:26px;font-weight:600;letter-spacing:-.02em;margin:0}
+.bias-sub{font-size:13px;color:var(--muted);margin:4px 0 14px}
+.meter{position:relative;height:10px;border-radius:5px;background:linear-gradient(90deg,var(--down),var(--line) 50%,var(--up))}
+.needle{position:absolute;top:-6px;width:3px;height:22px;background:var(--ink);border-radius:2px;transform:translateX(-50%);transition:left .4s ease}
+@media (prefers-reduced-motion:reduce){.needle{transition:none}}
+.meter-ends{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:8px}
+ul.reasons{list-style:disc;padding-left:18px;margin:14px 0 0;font-size:13px;line-height:1.6}
+.list{display:flex;flex-direction:column;gap:6px;max-height:260px;overflow:auto}
+.row{display:flex;justify-content:space-between;gap:8px;font-size:13px;padding:7px 9px;border-radius:8px;background:var(--soft)}
+.row b{font-weight:500}
+.up{color:var(--up)}.down{color:var(--down)}.mut{color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:7px 4px;border-bottom:1px solid var(--line)}
+th{font-weight:500;color:var(--muted)}
+td.n{text-align:right}th.n{text-align:right}
+.table-wrap{overflow-x:auto}
+.foot{font-size:12px;color:var(--muted);margin-top:18px;line-height:1.6;max-width:80ch}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Pattern Lens<small>Candlestick and chart patterns on Binance Futures, with how each one actually played out</small></h1>
+    <div class="controls">
+      <input id="sym" value="ADAUSDT" aria-label="Symbol" spellcheck="false">
+      <select id="tf" aria-label="Timeframe">
+        <option value="5m">5m</option><option value="15m">15m</option><option value="1h" selected>1h</option><option value="4h">4h</option>
+      </select>
+      <select id="hz" aria-label="Look-ahead candles">
+        <option value="3">Next 3 candles</option><option value="5" selected>Next 5 candles</option><option value="10">Next 10 candles</option>
+      </select>
+      <button id="load">Load chart</button>
+      <label class="chk"><input type="checkbox" id="auto" checked style="width:auto"> Auto refresh</label>
+    </div>
+  </header>
+
+  <div class="grid">
+    <div>
+      <div class="panel"><div id="chart"></div></div>
+      <p class="status" id="status">Loading…</p>
+    </div>
+    <div class="side">
+      <section class="panel" aria-live="polite">
+        <h2>Current bias</h2>
+        <p class="bias-label" id="biasLabel">…</p>
+        <p class="bias-sub" id="biasSub"></p>
+        <div class="meter"><div class="needle" id="needle" style="left:50%"></div></div>
+        <div class="meter-ends"><span>Bearish</span><span>Neutral</span><span>Bullish</span></div>
+        <ul class="reasons" id="reasons"></ul>
+      </section>
+      <section class="panel" aria-live="polite">
+        <h2>Model signal</h2>
+        <p class="bias-label" id="mLabel">…</p>
+        <p class="bias-sub" id="mSub"></p>
+        <ul class="reasons" id="mInfo"></ul>
+      </section>
+      <section class="panel">
+        <h2>Recent patterns</h2>
+        <div class="list" id="recent"></div>
+      </section>
+      <section class="panel">
+        <h2>How each pattern played out here</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Pattern</th><th class="n">Seen</th><th class="n">Worked</th><th class="n">Avg move</th></tr></thead>
+          <tbody id="stats"></tbody>
+        </table></div>
+      </section>
+    </div>
+  </div>
+
+  <p class="foot">“Worked” means price moved in the pattern’s direction after the chosen number of candles, measured on the candles loaded above (about 500). Patterns are found on closed candles only; the last, still-forming candle is ignored. This is a rule-based indicator, not a trained model, and not financial advice.</p>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+let chart, candleS, ema20S, ema50S, timer = null;
+
+const PATTERNS = {
+  'Bull engulfing': {dir: 1, short: 'BE'},
+  'Bear engulfing': {dir: -1, short: 'BE'},
+  'Hammer': {dir: 1, short: 'H'},
+  'Shooting star': {dir: -1, short: 'SS'},
+  'Morning star': {dir: 1, short: 'MS'},
+  'Evening star': {dir: -1, short: 'ES'},
+  'Three soldiers': {dir: 1, short: '3S'},
+  'Three crows': {dir: -1, short: '3C'},
+  'Double bottom': {dir: 1, short: 'DB'},
+  'Double top': {dir: -1, short: 'DT'}
+};
+
+function themeOpts() {
+  return {
+    layout: {background: {type: 'solid', color: css('--card')}, textColor: css('--muted'), fontFamily: 'Sora, system-ui, sans-serif'},
+    grid: {vertLines: {color: css('--line')}, horzLines: {color: css('--line')}},
+    rightPriceScale: {borderColor: css('--line')},
+    timeScale: {borderColor: css('--line'), timeVisible: true, secondsVisible: false}
+  };
+}
+function initChart() {
+  chart = LightweightCharts.createChart($('#chart'), Object.assign({autoSize: true, crosshair: {mode: 0}}, themeOpts()));
+  candleS = chart.addCandlestickSeries({borderVisible: false});
+  ema20S = chart.addLineSeries({lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false});
+  ema50S = chart.addLineSeries({lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false});
+  applySeriesColors();
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { chart.applyOptions(themeOpts()); applySeriesColors(); if (lastRun) draw(lastRun); });
+}
+function applySeriesColors() {
+  candleS.applyOptions({upColor: css('--up'), downColor: css('--down'), wickUpColor: css('--up'), wickDownColor: css('--down')});
+  ema20S.applyOptions({color: css('--warn')});
+  ema50S.applyOptions({color: css('--accent')});
+}
+
+async function fetchKlines(sym, tf) {
+  const r = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${encodeURIComponent(sym)}&interval=${tf}&limit=500`);
+  if (!r.ok) throw new Error('Binance returned HTTP ' + r.status + (r.status === 400 ? ' (check the symbol)' : ''));
+  const j = await r.json();
+  return j.map(k => ({time: Math.floor(k[0] / 1000), open: +k[1], high: +k[2], low: +k[3], close: +k[4]}));
+}
+function sampleData(tf) {
+  const step = {'5m': 300, '15m': 900, '1h': 3600, '4h': 14400}[tf];
+  let t = Math.floor(Date.now() / 1000 / step) * step - step * 499, p = 0.155, out = [];
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 500; i++) {
+    const drift = Math.sin(i / 40) * 0.0012;
+    const o = p, c = o * (1 + drift + (rnd() - 0.5) * 0.012);
+    const h = Math.max(o, c) * (1 + rnd() * 0.005), l = Math.min(o, c) * (1 - rnd() * 0.005);
+    out.push({time: t + i * step, open: o, high: h, low: l, close: c}); p = c;
+  }
+  return out;
+}
+
+function ema(v, p) { const k = 2 / (p + 1), out = []; let e = v[0]; v.forEach((x, i) => { e = i ? x * k + e * (1 - k) : x; out.push(e); }); return out; }
+function rsi(v, p = 14) {
+  const out = Array(v.length).fill(null); let g = 0, l = 0;
+  for (let i = 1; i < v.length; i++) {
+    const d = v[i] - v[i - 1], up = Math.max(d, 0), dn = Math.max(-d, 0);
+    if (i <= p) { g += up / p; l += dn / p; if (i === p) out[i] = 100 - 100 / (1 + g / (l || 1e-9)); }
+    else { g = (g * (p - 1) + up) / p; l = (l * (p - 1) + dn) / p; out[i] = 100 - 100 / (1 + g / (l || 1e-9)); }
+  }
+  return out;
+}
+
+function detect(c, e20) {
+  const found = [], body = x => Math.abs(x.close - x.open), bull = x => x.close > x.open, bear = x => x.close < x.open;
+  const avgBody = i => { let s = 0, n = 0; for (let j = Math.max(0, i - 20); j < i; j++) { s += body(c[j]); n++; } return n ? s / n : body(c[i]); };
+  for (let i = 2; i < c.length; i++) {
+    const a = c[i], b = c[i - 1], z = c[i - 2], ab = avgBody(i);
+    const bd = body(a), up = a.high - Math.max(a.open, a.close), lo = Math.min(a.open, a.close) - a.low;
+    if (bear(b) && bull(a) && a.open <= b.close && a.close >= b.open && bd > body(b)) found.push({i, name: 'Bull engulfing'});
+    if (bull(b) && bear(a) && a.open >= b.close && a.close <= b.open && bd > body(b)) found.push({i, name: 'Bear engulfing'});
+    if (bd > 0 && lo >= 2 * bd && up <= 0.5 * bd && a.close < e20[i]) found.push({i, name: 'Hammer'});
+    if (bd > 0 && up >= 2 * bd && lo <= 0.5 * bd && a.close > e20[i]) found.push({i, name: 'Shooting star'});
+    if (bear(z) && body(z) > ab && body(b) < 0.3 * body(z) && bull(a) && a.close > (z.open + z.close) / 2) found.push({i, name: 'Morning star'});
+    if (bull(z) && body(z) > ab && body(b) < 0.3 * body(z) && bear(a) && a.close < (z.open + z.close) / 2) found.push({i, name: 'Evening star'});
+    if ([z, b, a].every(bull) && b.close > z.close && a.close > b.close && [z, b, a].every(x => body(x) > 0.6 * ab)) found.push({i, name: 'Three soldiers'});
+    if ([z, b, a].every(bear) && b.close < z.close && a.close < b.close && [z, b, a].every(x => body(x) > 0.6 * ab)) found.push({i, name: 'Three crows'});
+  }
+  const k = 5, highs = [], lows = [];
+  for (let i = k; i < c.length - k; i++) {
+    let isH = true, isL = true;
+    for (let j = i - k; j <= i + k; j++) { if (c[j].high > c[i].high) isH = false; if (c[j].low < c[i].low) isL = false; }
+    if (isH) highs.push(i); if (isL) lows.push(i);
+  }
+  const tol = 0.006;
+  for (let n = 1; n < highs.length; n++) {
+    const p = highs[n - 1], q = highs[n]; if (q - p < 8) continue;
+    const h1 = c[p].high, h2 = c[q].high; let trough = Infinity; for (let j = p; j <= q; j++) trough = Math.min(trough, c[j].low);
+    if (Math.abs(h1 - h2) / h1 < tol && (Math.min(h1, h2) - trough) / h1 > 0.015) found.push({i: Math.min(q + k, c.length - 1), name: 'Double top'});
+  }
+  for (let n = 1; n < lows.length; n++) {
+    const p = lows[n - 1], q = lows[n]; if (q - p < 8) continue;
+    const l1 = c[p].low, l2 = c[q].low; let peak = -Infinity; for (let j = p; j <= q; j++) peak = Math.max(peak, c[j].high);
+    if (Math.abs(l1 - l2) / l1 < tol && (peak - Math.max(l1, l2)) / l1 > 0.015) found.push({i: Math.min(q + k, c.length - 1), name: 'Double bottom'});
+  }
+  return found.map(f => Object.assign(f, {dir: PATTERNS[f.name].dir})).sort((x, y) => x.i - y.i);
+}
+
+function stats(c, found, H) {
+  const s = {};
+  Object.keys(PATTERNS).forEach(n => s[n] = {seen: 0, tested: 0, worked: 0, move: 0});
+  found.forEach(f => {
+    const r = s[f.name]; r.seen++;
+    if (f.i + H < c.length) { const ret = (c[f.i + H].close / c[f.i].close - 1) * f.dir; r.tested++; r.move += ret; if (ret > 0) r.worked++; }
+  });
+  return s;
+}
+
+function bias(c, found, st, e20, e50, rs) {
+  const last = c.length - 1, reasons = []; let score = 0;
+  found.filter(f => f.i >= last - 2).forEach(f => {
+    const r = st[f.name]; let w = 1;
+    if (r.tested >= 5) w = Math.max(-1, Math.min(1, (r.worked / r.tested - 0.5) * 4));
+    score += f.dir * w;
+    const rate = r.tested >= 5 ? `, worked ${Math.round(100 * r.worked / r.tested)}% of ${r.tested} times here` : ', too few past cases to trust';
+    reasons.push(`${f.name} ${last - f.i === 0 ? 'on the last closed candle' : (last - f.i === 1 ? '1 candle ago' : (last - f.i) + ' candles ago')}${rate}`);
+  });
+  if (e20[last] > e50[last]) { score += 0.5; reasons.push('EMA 20 is above EMA 50, short-term trend is up'); }
+  else { score -= 0.5; reasons.push('EMA 20 is below EMA 50, short-term trend is down'); }
+  const r = rs[last];
+  if (r > 70) { score -= 0.5; reasons.push(`RSI ${r.toFixed(0)} is overbought, upside may be stretched`); }
+  else if (r < 30) { score += 0.5; reasons.push(`RSI ${r.toFixed(0)} is oversold, downside may be stretched`); }
+  else reasons.push(`RSI ${r.toFixed(0)} is in the normal range`);
+  if (!found.some(f => f.i >= last - 2)) reasons.unshift('No pattern on the last 3 closed candles, so the bias comes from trend only');
+  return {score: Math.max(-2, Math.min(2, score)), reasons};
+}
+
+let lastRun = null;
+function draw(run) {
+  const {c, found, e20, e50} = run, last = c.length - 1;
+  candleS.setData(c.concat(run.live ? [run.live] : []));
+  ema20S.setData(c.map((x, i) => ({time: x.time, value: e20[i]})));
+  ema50S.setData(c.map((x, i) => ({time: x.time, value: e50[i]})));
+  candleS.setMarkers(found.map(f => ({
+    time: c[f.i].time, position: f.dir > 0 ? 'belowBar' : 'aboveBar',
+    color: f.dir > 0 ? css('--up') : css('--down'), shape: f.dir > 0 ? 'arrowUp' : 'arrowDown', text: PATTERNS[f.name].short
+  })));
+}
+
+async function run() {
+  const sym = $('#sym').value.trim().toUpperCase(), tf = $('#tf').value, H = +$('#hz').value, st = $('#status');
+  let all, demo = false;
+  try { all = await fetchKlines(sym, tf); }
+  catch (e) { all = sampleData(tf); demo = true; st.textContent = `Could not reach Binance (${e.message}). Showing sample data so you can see how it works.`; st.className = 'status warn'; }
+  const live = all[all.length - 1], c = all.slice(0, -1), closes = c.map(x => x.close);
+  const e20 = ema(closes, 20), e50 = ema(closes, 50), rs = rsi(closes);
+  const found = detect(c, e20), s = stats(c, found, H), b = bias(c, found, s, e20, e50, rs);
+  lastRun = {c, found, e20, e50, live};
+  draw(lastRun);
+
+  const label = b.score >= 0.75 ? 'Leaning bullish' : b.score <= -0.75 ? 'Leaning bearish' : 'No clear edge';
+  $('#biasLabel').textContent = label;
+  $('#biasLabel').className = 'bias-label ' + (b.score >= 0.75 ? 'up' : b.score <= -0.75 ? 'down' : '');
+  $('#biasSub').textContent = `${demo ? 'Sample data' : sym + ' ' + tf}, score ${b.score.toFixed(2)} on a scale of −2 to +2`;
+  $('#needle').style.left = (50 + b.score * 25) + '%';
+  $('#reasons').innerHTML = b.reasons.map(r => `<li>${r}</li>`).join('');
+
+  const fmtT = t => new Date(t * 1000).toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
+  const recent = found.slice(-12).reverse();
+  $('#recent').innerHTML = recent.length ? recent.map(f =>
+    `<div class="row"><b class="${f.dir > 0 ? 'up' : 'down'}">${f.name}</b><span class="mut">${fmtT(c[f.i].time)}</span></div>`).join('')
+    : '<div class="row mut">No patterns found in this range. Try another timeframe.</div>';
+
+  $('#stats').innerHTML = Object.entries(s).filter(([, r]) => r.seen).sort((a, b) => b[1].seen - a[1].seen).map(([n, r]) => {
+    const w = r.tested ? Math.round(100 * r.worked / r.tested) : null, m = r.tested ? 100 * r.move / r.tested : null;
+    return `<tr><td class="${PATTERNS[n].dir > 0 ? 'up' : 'down'}">${n}</td><td class="n">${r.seen}</td>
+      <td class="n">${w === null ? 'n/a' : w + '%'}</td><td class="n ${m > 0 ? 'up' : m < 0 ? 'down' : ''}">${m === null ? 'n/a' : (m > 0 ? '+' : '') + m.toFixed(2) + '%'}</td></tr>`;
+  }).join('') || '<tr><td colspan="4" class="mut">No patterns yet.</td></tr>';
+
+  modelSignal(sym, tf);
+  if (!demo) { st.textContent = `${sym} ${tf}: ${c.length} closed candles, ${found.length} patterns. Updated ${new Date().toLocaleTimeString()}.`; st.className = 'status'; }
+}
+
+async function modelSignal(sym, tf) {
+  const L = $('#mLabel'), S = $('#mSub'), I = $('#mInfo');
+  const pct = x => (x === null || x === undefined || isNaN(x)) ? 'n/a' : Math.round(x * 100) + '%';
+  try {
+    const r = await fetch(`http://127.0.0.1:8000/predict?symbol=${encodeURIComponent(sym)}&interval=${tf}`);
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
+    L.textContent = j.signal === 'NO TRADE' ? 'No trade' : j.signal;
+    L.className = 'bias-label ' + (j.signal === 'BUY' ? 'up' : j.signal === 'SELL' ? 'down' : '');
+    S.textContent = `P(up) ${pct(j.prob_up)}: chance of +${j.k} ATR before −${j.k} ATR within ${j.horizon} candles`;
+    const cv = j.cv, items = [
+      `Walk-forward AUC ${cv.auc.toFixed(3)} (0.500 is a coin flip)`,
+      `BUY was right ${pct(cv.buy_precision)} of the time, base rate ${pct(cv.base_up_rate)}`,
+      `SELL was right ${pct(cv.sell_precision)} of the time, base rate ${pct(1 - cv.base_up_rate)}`];
+    if (j.holdout) items.push(`Hold-out AUC ${j.holdout.auc.toFixed(3)} on data the model never saw`);
+    I.innerHTML = items.map(x => `<li>${x}</li>`).join('');
+  } catch (e) {
+    L.textContent = 'Not connected'; L.className = 'bias-label';
+    S.textContent = /No model/.test(e.message) ? e.message : 'Start the model server on this computer: uvicorn serve:app --port 8000';
+    I.innerHTML = '';
+  }
+}
+
+function schedule() { clearInterval(timer); if ($('#auto').checked) timer = setInterval(run, 60000); }
+$('#load').addEventListener('click', () => { run(); schedule(); });
+$('#sym').addEventListener('keydown', e => { if (e.key === 'Enter') { run(); schedule(); } });
+['#tf', '#hz'].forEach(s => $(s).addEventListener('change', run));
+$('#auto').addEventListener('change', schedule);
+initChart(); run(); schedule();
+</script>
+</body>
+</html>
