@@ -67,6 +67,9 @@ td.n{text-align:right}th.n{text-align:right}
       <select id="hz" aria-label="Look-ahead candles">
         <option value="3">Next 3 candles</option><option value="5" selected>Next 5 candles</option><option value="10">Next 10 candles</option>
       </select>
+      <select id="marks" aria-label="Chart markers">
+        <option value="trend" selected>Markers: trend changes</option><option value="research">Markers: research signals</option><option value="all">Markers: all patterns</option><option value="none">Markers: none</option>
+      </select>
       <button id="load">Load chart</button>
       <label class="chk"><input type="checkbox" id="auto" checked style="width:auto"> Auto refresh</label>
       <span class="live" id="liveBadge" aria-live="polite">Connecting…</span>
@@ -77,6 +80,7 @@ td.n{text-align:right}th.n{text-align:right}
     <div>
       <div class="panel"><div id="chart"></div></div>
       <p class="status" id="status">Loading…</p>
+      <p class="status" id="markNote"></p>
     </div>
     <div class="side">
       <section class="panel" aria-live="polite">
@@ -260,10 +264,26 @@ function draw(run) {
   candleS.setData(c.concat(run.live ? [run.live] : []));
   ema20S.setData(c.map((x, i) => ({time: x.time, value: e20[i]})));
   ema50S.setData(c.map((x, i) => ({time: x.time, value: e50[i]})));
-  candleS.setMarkers(found.map(f => ({
-    time: c[f.i].time, position: f.dir > 0 ? 'belowBar' : 'aboveBar',
-    color: f.dir > 0 ? css('--up') : css('--down'), shape: f.dir > 0 ? 'arrowUp' : 'arrowDown', text: PATTERNS[f.name].short
-  })));
+  const mode = $('#marks').value, up = css('--up'), dn = css('--down');
+  const mk = (i, d, text) => ({time: c[i].time, position: d > 0 ? 'belowBar' : 'aboveBar', color: d > 0 ? up : dn, shape: d > 0 ? 'arrowUp' : 'arrowDown', text});
+  let marks = [];
+  if (mode === 'trend') {
+    // EMA 20 crossing EMA 50, counted only once the new side has held for 3 closed candles (filters whipsaws)
+    const st = c.map((x, i) => e20[i] > e50[i] ? 1 : -1);
+    for (let i = 53; i < c.length; i++)
+      if (st[i] === st[i - 1] && st[i - 1] === st[i - 2] && st[i - 2] !== st[i - 3]) marks.push(mk(i, st[i], st[i] > 0 ? 'Uptrend' : 'Downtrend'));
+    $('#markNote').textContent = 'Trend change: EMA 20 crossed EMA 50 and stayed on the new side for 3 closed candles.';
+  } else if (mode === 'research') {
+    found.forEach(f => {
+      if (f.name === 'Three crows') marks.push(mk(f.i, 1, 'Bounce?'));
+      if (f.name === 'Three soldiers' && !(e20[f.i] > e50[f.i])) marks.push(mk(f.i, -1, 'Fade?'));
+    });
+    $('#markNote').textContent = 'Research signals: after three red candles price rose within 5 candles 54% of the time (base 50%); after three green candles in a downtrend it rose only 47% (base 51%). A small statistical edge, not a trade signal.';
+  } else if (mode === 'all') {
+    marks = found.map(f => mk(f.i, f.dir, PATTERNS[f.name].short));
+    $('#markNote').textContent = 'All patterns, labelled by their textbook direction.';
+  } else $('#markNote').textContent = '';
+  candleS.setMarkers(marks);
 }
 
 async function run() {
@@ -361,6 +381,7 @@ function schedule() { clearInterval(timer); if ($('#auto').checked) timer = setI
 $('#load').addEventListener('click', () => { run(); schedule(); });
 $('#sym').addEventListener('keydown', e => { if (e.key === 'Enter') { run(); schedule(); } });
 ['#tf', '#hz'].forEach(s => $(s).addEventListener('change', run));
+$('#marks').addEventListener('change', () => { if (lastRun) draw(lastRun); });
 $('#auto').addEventListener('change', schedule);
 initChart(); run(); schedule();
 </script>
