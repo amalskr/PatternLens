@@ -128,6 +128,15 @@ table.votes tr.call td{border-bottom:none;font-weight:600;border-top:2px solid v
         <p class="bias-sub" id="mSub"></p>
         <ul class="reasons" id="mInfo"></ul>
       </section>
+      <section class="panel" aria-live="polite">
+        <h2>AI analyst</h2>
+        <div class="controls" style="margin-bottom:12px">
+          <select id="lang" aria-label="Language"><option value="si">සිංහල</option><option value="en">English</option></select>
+          <button id="explainBtn">Explain this chart</button>
+        </div>
+        <div id="aiText" class="bias-sub" style="white-space:pre-wrap;color:var(--ink);line-height:1.65">Press the button for a plain-language summary of what this chart shows, using the research numbers.</div>
+        <p class="bias-sub" id="aiEngine" style="margin-top:10px"></p>
+      </section>
     </div>
   </div>
 
@@ -204,7 +213,7 @@ async function fetchKlines(sym, tf) {
   const r = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${encodeURIComponent(sym)}&interval=${tf}&limit=500`);
   if (!r.ok) throw new Error('Binance returned HTTP ' + r.status + (r.status === 400 ? ' (check the symbol)' : ''));
   const j = await r.json();
-  return j.map(k => ({time: toChartTime(k[0]), open: +k[1], high: +k[2], low: +k[3], close: +k[4]}));
+  return j.map(k => ({time: toChartTime(k[0]), open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5]}));
 }
 function sampleData(tf) {
   const step = {'5m': 300, '15m': 900, '1h': 3600, '4h': 14400}[tf];
@@ -690,6 +699,13 @@ function draw(run) {
   const judged = pats.filter(pt => pt.status !== 'forming' && pt.brk !== null && pt.call);
   const callRight = judged.filter(pt => pt.call.dir === pt.bdir).length;
   const tbJudged = judged.filter(pt => pt.dir), tbRight = tbJudged.filter(pt => pt.dir === pt.bdir).length;
+  run.pats = pats;
+  const pc = x => `${Math.round(100 * x)}%`;
+  const honest = name => {  // full-history target rate, real vs shuffled random data
+    const st = run.srv && run.srv.stats && run.srv.stats[name];
+    return st ? `targets hit ${pc(st.target_real)} since 2021, ${pc(st.target_null)} on random data` : '';
+  };
+  const srvFor = pt => run.srv && run.srv.patterns.slice().reverse().find(q => q.name === pt.name && q.status === pt.status);
   run.shapes = [];
   const hitRate = name => {
     const done = pats.filter(pt => pt.name === name && (pt.status === 'target' || pt.status === 'stop'));
@@ -729,7 +745,7 @@ function draw(run) {
             run.shapes.push({t: 'path', col: c2, op: main ? 0.75 : 0.3, pts: [[last, now], [last + 3, pl.entry], [last + 3 + lenP, pl.target]]});
             L(last + 1, pl.entry, last + 3 + lenP, pl.entry, c2, true, 1);
             L(last + 1, pl.target, last + 3 + lenP, pl.target, c2, true, 1);
-            run.shapes.push({t: 'text', i: xe, p: pl.target, dy: 4, col: c2, text: `${s2 > 0 ? 'Buy' : 'Short'} target ${fmt(pl.target)}${main ? '  ← call' : ''}`});
+            run.shapes.push({t: 'text', i: xe, p: pl.target, dy: 4, col: c2, text: `${s2 > 0 ? 'Buy' : 'Short'} target ${fmt(pl.target)}${main ? '  ← lean' : ''}`});
             run.shapes.push({t: 'text', i: xe, p: pl.entry, dy: 4, col: c2,
               text: chan ? `${s2 > 0 ? 'Buy above' : 'Short below'} ${fmt(pl.entry)}` : `${s2 > 0 ? 'Buy above, short stop' : 'Short below, buy stop'} ${fmt(pl.entry)}`});
           });
@@ -746,10 +762,11 @@ function draw(run) {
           run.shapes.push({t: 'path', col: c2, op: 0.75, pts: [[last, now], [last + 3, pl.entry], [last + 3 + lenP, pl.target]]});
           L(last + 1, pl.entry, last + 3 + lenP, pl.entry, acc, true, 1);
           L(last + 1, pl.stop, last + 3 + lenP, pl.stop, css('--muted'), true, 1);
-          run.shapes.push({t: 'text', i: xe, p: pl.target, dy: 4, col: c2, text: `Call: ${d > 0 ? 'UP' : 'DOWN'}, target ${fmt(pl.target)}`});
+          run.shapes.push({t: 'text', i: xe, p: pl.target, dy: 4, col: c2, text: `Lean: ${d > 0 ? 'UP' : 'DOWN'}, target ${fmt(pl.target)}`});
+          if (honest(pt.name)) run.shapes.push({t: 'text', i: xe, p: pl.target, dy: d > 0 ? -26 : 34, col: css('--muted'), text: honest(pt.name)});
           run.shapes.push({t: 'text', i: xe, p: pl.target, dy: d > 0 ? -12 : 20, col: css('--muted'), text: voteLine});
           run.shapes.push({t: 'text', i: xe, p: pl.entry, dy: 4, col: acc, text: `Confirmed on a close ${d > 0 ? 'above' : 'below'} ${fmt(pl.entry)}`});
-          run.shapes.push({t: 'text', i: xe, p: pl.stop, dy: 4, col: css('--muted'), text: `Call wrong ${d > 0 ? 'below' : 'above'} ${fmt(pl.stop)}`});
+          run.shapes.push({t: 'text', i: xe, p: pl.stop, dy: 4, col: css('--muted'), text: `Lean wrong ${d > 0 ? 'below' : 'above'} ${fmt(pl.stop)}`});
         }
       } else if (pt.status === 'open') {
         // Broke out and still running: show where it is heading and where it fails
@@ -759,6 +776,7 @@ function draw(run) {
         L(pt.brk, pt.stop, last + 10, pt.stop, css('--muted'), true, 1);
         L(pt.brk, pt.target, last + 10, pt.target, c2, true, 1);
         run.shapes.push({t: 'text', i: xe, p: pt.target, dy: 4, col: c2, text: `Target ${fmt(pt.target)}`});
+        if (honest(pt.name)) run.shapes.push({t: 'text', i: xe, p: pt.target, dy: d > 0 ? -12 : 20, col: css('--muted'), text: honest(pt.name)});
         run.shapes.push({t: 'text', i: xe, p: pt.entry, dy: 4, col: acc, text: `Broke ${d > 0 ? 'up' : 'down'} at ${fmt(pt.entry)}`});
         run.shapes.push({t: 'text', i: xe, p: pt.stop, dy: 4, col: css('--muted'), text: `Stop ${fmt(pt.stop)}`});
       } else if (pt.entry !== undefined) {
@@ -766,7 +784,7 @@ function draw(run) {
         [[pt.entry, acc], [pt.stop, dn], [pt.target, up]].forEach(([v, c2]) => L(pt.brk, v, i1, v, c2, true, 1.2));
       }
     });
-    $('#markNote').textContent = 'Chart patterns are drawn through swing points (a swing needs a 2 ATR reversal). Green = bullish, red = bearish, blue = can break either way (triangles, consolidation channels). For a pattern still forming, the dotted path is the system’s call: one direction, from the textbook direction, the trend and where price sits inside the pattern. It can be wrong; the grey line marks where it is. Indecisive patterns (symmetrical triangle, consolidation channel) show both sides as on the Binance cheat sheet, the called side drawn stronger. The panel shows how often this call rule picked the right side on past breakouts. "Reached target" means price hit the target before the stop after the breakout. Patterns are recognised only once their last swing point is confirmed, so nothing here uses future candles.';
+    $('#markNote').textContent = 'Chart patterns are drawn through swing points (a swing needs a 2 ATR reversal). Green = bullish, red = bearish, blue = can break either way (triangles, consolidation channels). For a pattern still forming, the dotted path is the lean: the side the textbook direction, the trend and price position point to. Research on 37,000 patterns found this kind of guess is no better on real charts than on shuffled random ones, so read it as a description, not a forecast. Indecisive patterns (symmetrical triangle, consolidation channel) show both sides as on the Binance cheat sheet, the called side drawn stronger. "Reached target" means price hit the target before the stop after the breakout. Patterns are recognised only once their last swing point is confirmed, so nothing here uses future candles.';
   }
   const forming = pats.filter(pt => pt.status === 'forming');
   run.forming = forming;
@@ -774,14 +792,19 @@ function draw(run) {
   const wins = done.filter(pt => pt.status === 'target').length, other = pats.filter(pt => pt.status === 'other way').length;
   const cls = pt => pt.dir > 0 ? 'up' : pt.dir < 0 ? 'down' : '';
   const fT = i => new Date(c[i].time * 1000).toLocaleString([], {timeZone: 'UTC', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
+  const modelLine = pt => {
+    const q = srvFor(pt), h = honest(pt.name);
+    const m = q && q.p_up !== null ? `Trained model: ${pc(q.p_up)} up. It scores the same on random data, so this is not a forecast. ` : '';
+    return m || h ? `<div class="row mut" style="background:none;padding-top:0">${m}${h ? h[0].toUpperCase() + h.slice(1) + '.' : ''}</div>` : '';
+  };
   const rowsF = forming.map(pt => {
     const k = pt.call, pl = pt.kind === 'lines' ? (k.dir > 0 ? pt.up : pt.dn) : {entry: pt.entry, stop: pt.stop, target: pt.target};
     return `<div class="row"><b class="${cls(pt)}">${pt.name}</b><span>forming now</span></div>
     <table class="votes"><tbody>${k.parts.map(q => `<tr><td>${q.k}</td><td class="${q.v > 0 ? 'up' : q.v < 0 ? 'down' : 'mut'}">${q.v > 0 ? '▲ Up' : q.v < 0 ? '▼ Down' : '• None'}</td><td class="mut">${q.d}</td></tr>`).join('')}
-      <tr class="call"><td>Call</td><td class="${k.dir > 0 ? 'up' : 'down'}">${k.dir > 0 ? '▲ UP' : '▼ DOWN'}</td><td>${k.votes} of ${k.of} votes agree</td></tr></tbody></table>
+      <tr class="call"><td>Lean</td><td class="${k.dir > 0 ? 'up' : 'down'}">${k.dir > 0 ? '▲ UP' : '▼ DOWN'}</td><td>${k.votes} of ${k.of} votes agree</td></tr></tbody></table>
     <div class="row mut" style="background:none;padding-top:0">${!pt.dir && pt.kind === 'lines'
-      ? `Indecisive: either side can win. Buy above ${fmt(pt.up.entry)}, target ${fmt(pt.up.target)}. Short below ${fmt(pt.dn.entry)}, target ${fmt(pt.dn.target)}. The call favours ${k.dir > 0 ? 'the buy' : 'the short'}.`
-      : `Confirmed on a close ${k.dir > 0 ? 'above' : 'below'} ${fmt(pl.entry)}, target ${fmt(pl.target)}, wrong ${k.dir > 0 ? 'below' : 'above'} ${fmt(pl.stop)}.`}</div>`;
+      ? `Indecisive: either side can win. Buy above ${fmt(pt.up.entry)}, target ${fmt(pt.up.target)}. Short below ${fmt(pt.dn.entry)}, target ${fmt(pt.dn.target)}. The lean favours ${k.dir > 0 ? 'the buy' : 'the short'}.`
+      : `Confirmed on a close ${k.dir > 0 ? 'above' : 'below'} ${fmt(pl.entry)}, target ${fmt(pl.target)}, wrong ${k.dir > 0 ? 'below' : 'above'} ${fmt(pl.stop)}.`}</div>${modelLine(pt)}`;
   });
   const tagS = {target: '✓ target', stop: '✗ stop', 'other way': '✗ other way', open: 'running', expired: 'no breakout', timeout: 'no result in time'};
   const rowsD = pats.filter(pt => pt.status !== 'forming' && pt.status !== 'open').slice(-6).reverse().map(pt =>
@@ -790,11 +813,12 @@ function draw(run) {
     const d = pt.bdir, ok = pt.call ? pt.call.dir === d : null, px = run.live ? run.live.close : c[last].close;
     const back = d > 0 ? px < pt.entry : px > pt.entry;
     return `<div class="row"><b class="${d > 0 ? 'up' : 'down'}">${pt.name}</b><span>broke ${d > 0 ? 'up' : 'down'}, running</span></div>
-    <div class="row mut" style="background:none;padding-top:0">Entry ${fmt(pt.entry)}, target ${fmt(pt.target)}, stop ${fmt(pt.stop)}.${ok === null ? '' : ` The call said ${pt.call.dir > 0 ? 'UP' : 'DOWN'}: ${ok ? '✓ right side' : '✗ wrong side'}.`}${back ? ` <span style="color:var(--warn)">Price ${fmt(px)} is back ${d > 0 ? 'below' : 'above'} the breakout level: a retest, or a false break if it reaches the stop.</span>` : ''}</div>`;
+    <div class="row mut" style="background:none;padding-top:0">Entry ${fmt(pt.entry)}, target ${fmt(pt.target)}, stop ${fmt(pt.stop)}.${ok === null ? '' : ` The lean was ${pt.call.dir > 0 ? 'UP' : 'DOWN'}: ${ok ? '✓ right side' : '✗ wrong side'}.`}${honest(pt.name) ? ` ${honest(pt.name)[0].toUpperCase() + honest(pt.name).slice(1)}.` : ''}${back ? ` <span style="color:var(--warn)">Price ${fmt(px)} is back ${d > 0 ? 'below' : 'above'} the breakout level: a retest, or a false break if it reaches the stop.</span>` : ''}</div>`;
   });
   $('#cpats').innerHTML = rowsF.concat(rowsO, rowsD).join('') || '<div class="row mut">No chart pattern in the loaded candles. Try another timeframe.</div>';
   $('#cpSum').textContent = forming.length ? '' : 'Nothing forming right now.';
-  if (judged.length) $('#cpSum').textContent += ` Track record in these candles: the call picked the breakout side ${callRight} of ${judged.length} times${tbJudged.length ? `; the textbook alone ${tbRight} of ${tbJudged.length}` : ''}.`;
+  if (run.srv && run.srv.model) $('#cpSum').textContent += ` Guessing the breakout side: the trained model was right ${run.srv.model.real.toFixed(1)}% on real charts and ${run.srv.model.shuffled.toFixed(1)}% on shuffled random ones (edge ${run.srv.model.edge >= 0 ? '+' : ''}${run.srv.model.edge.toFixed(1)} pp), so the lean describes where price sits, it does not forecast.`;
+  else $('#cpSum').textContent += ' Guessing which side a pattern breaks looks accurate even on random data, so no track record is shown. Start serve.py for the research numbers.';
   if (done.length) $('#cpSum').textContent += ` In these ${c.length} candles: ${done.length} breakouts in the expected direction were resolved, ${wins} reached target before stop (${Math.round(100 * wins / done.length)}%). ${other} broke the other way. Small sample.`;
 
   candleS.setMarkers(marks);
@@ -819,6 +843,16 @@ async function longRunStats(sym, tf, H) {
   return lrCache[key];
 }
 
+// The research detector and trained model, run by the local server on the same candles
+async function serverPatterns(sym, tf, c) {
+  try {
+    const r = await fetch('http://127.0.0.1:8000/patterns', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({symbol: sym, interval: tf, candles: c.map(x => [x.time * 1000, x.open, x.high, x.low, x.close, x.volume || 0])})});
+    if (!r.ok) throw new Error();
+    return await r.json();
+  } catch (e) { return null; }
+}
+
 async function run() {
   const sym = $('#sym').value.trim().toUpperCase(), tf = $('#tf').value, H = +$('#hz').value, st = $('#status');
   let all, demo = false;
@@ -832,7 +866,8 @@ async function run() {
   const e20 = ema(closes, 20), e50 = ema(closes, 50), rs = rsi(closes);
   const lr = demo ? null : await longRunStats(sym, tf, H);
   const found = detect(c, e20), s = stats(c, found, H), b = bias(c, found, s, e20, e50, rs, lr);
-  lastRun = {c, found, e20, e50, live};
+  const srv = demo ? null : await serverPatterns(sym, tf, c);
+  lastRun = {c, found, e20, e50, live, srv, sym, tf};
   draw(lastRun);
 
   const label = b.score >= 0.75 ? 'Leaning bullish' : b.score <= -0.75 ? 'Leaning bearish' : 'No clear edge';
@@ -921,6 +956,60 @@ function startLive(sym, tf) {
     setTimeout(() => { if (ws === sock) { ws = null; wsKey = ''; startLive(sym, tf); } }, 3000);
   };
 }
+
+// ---------- AI analyst: the facts on this page, explained in plain words by a language model ----------
+function analystFacts() {
+  const run = lastRun;
+  if (!run) return null;
+  const c = run.c, last = c.length - 1, e20 = run.e20, e50 = run.e50, f = v => +v.toFixed(prec);
+  const st = name => {
+    const x = run.srv && run.srv.stats && run.srv.stats[name];
+    return x ? {past_breakouts: x.n, target_reached_before_stop_real: `${Math.round(100 * x.target_real)}%`,
+      same_on_random_data: `${Math.round(100 * x.target_null)}%`} : 'no full-history numbers available';
+  };
+  const pats = (run.pats || []).filter(pt => pt.status === 'forming' || pt.status === 'open').map(pt => {
+    const o = {name: pt.name, textbook_direction: pt.dir > 0 ? 'up' : pt.dir < 0 ? 'down' : 'none (either side)', history: st(pt.name)};
+    if (pt.status === 'forming') {
+      o.status = 'still forming, no breakout yet';
+      if (pt.kind === 'lines') { o.break_up_above = f(pt.up.entry); o.break_down_below = f(pt.dn.entry); o.target_if_up = f(pt.up.target); o.target_if_down = f(pt.dn.target); }
+      else { o.breakout_level = f(pt.entry); o.stop = f(pt.stop); o.target = f(pt.target); }
+      if (pt.call) o.lean = `${pt.call.dir > 0 ? 'up' : 'down'} (${pt.call.why.join(', ')}); research shows this lean has no edge over random data`;
+    } else {
+      o.status = `broke ${pt.bdir > 0 ? 'up' : 'down'} and is still running`;
+      Object.assign(o, {broke_at: f(pt.entry), stop: f(pt.stop), target: f(pt.target)});
+    }
+    return o;
+  });
+  const findings = [
+    'Over 6 years and 13 coins, textbook candlestick patterns showed no edge in their textbook direction after fees.',
+    'Three black crows were followed by a small bounce more often than not (about 54% vs 50%), the opposite of the textbook; downtrend three white soldiers faded (about 47% vs 51%). Small effects, thin after fees.',
+    'After a chart pattern breakout, the textbook target was reached before the stop only about 28% of the time, close to the 27% seen on random data.'];
+  if (run.srv && run.srv.model) findings.push(`A trained model guessed the breakout side right ${run.srv.model.real.toFixed(0)}% of the time on real charts and ${run.srv.model.shuffled.toFixed(0)}% on random ones: no real edge.`);
+  return {
+    symbol: run.sym, timeframe: run.tf, last_closed_candle_price: f(c[last].close),
+    trend: e20[last] > e50[last] ? 'short-term trend up (EMA 20 above EMA 50)' : 'short-term trend down (EMA 20 below EMA 50)',
+    candlestick_notes: [...document.querySelectorAll('#reasons li')].map(li => li.textContent),
+    chart_patterns_now: pats.length ? pats : 'none forming or running',
+    model_signal: $('#mSub').textContent,
+    research_findings: findings};
+}
+async function explainChart() {
+  const out = $('#aiText'), eng = $('#aiEngine'), facts = analystFacts();
+  if (!facts) { out.textContent = 'Load a chart first.'; return; }
+  out.textContent = 'Writing… a local model can take up to a minute.';
+  eng.textContent = '';
+  try {
+    const r = await fetch('http://127.0.0.1:8000/explain', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lang: $('#lang').value, facts})});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || 'HTTP ' + r.status);
+    out.textContent = j.text;
+    eng.textContent = `Written by ${j.engine} from the numbers on this page. It can make mistakes; the numbers are the source.`;
+  } catch (e) {
+    out.textContent = /No AI engine/.test(e.message) ? e.message : 'Start the local server first: uvicorn serve:app --port 8000';
+  }
+}
+$('#explainBtn').addEventListener('click', explainChart);
 
 function schedule() { clearInterval(timer); if ($('#auto').checked) timer = setInterval(run, 60000); }
 $('#load').addEventListener('click', () => { run(); schedule(); });
