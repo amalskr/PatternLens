@@ -131,21 +131,26 @@ table.votes tr.call td{border-bottom:none;font-weight:600;border-top:2px solid v
       <section class="panel" aria-live="polite">
         <h2>AI analyst</h2>
         <div class="controls" style="margin-bottom:12px">
-          <select id="lang" aria-label="Language"><option value="si">සිංහල</option><option value="en">English</option></select>
           <button id="explainBtn">Explain this chart</button>
         </div>
         <div id="aiText" class="bias-sub" style="white-space:pre-wrap;color:var(--ink);line-height:1.65">Press the button for a plain-language summary of what this chart shows, using the research numbers.</div>
         <p class="bias-sub" id="aiEngine" style="margin-top:10px"></p>
       </section>
+      <section class="panel" aria-live="polite">
+        <h2>Forward log</h2>
+        <div id="flog" class="bias-sub" style="color:var(--ink);line-height:1.65">Loading…</div>
+      </section>
     </div>
   </div>
 
-  <p class="foot">“Worked” means price moved in the pattern’s direction after the chosen number of candles, measured on the candles loaded above (about 500). Patterns are found on closed candles only; the last, still-forming candle is ignored. This is a rule-based indicator, not a trained model, and not financial advice.</p>
+  <p class="foot">“Worked” means price moved in the pattern’s direction after the chosen number of candles, measured on the candles loaded above (about 500). Patterns are found on closed candles only; the last, still-forming candle is ignored. This is a rule-based indicator, not a trained model, and not financial advice. Charts by <a href="https://www.tradingview.com/lightweight-charts/" target="_blank" rel="noopener">TradingView Lightweight Charts</a>.</p>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <script>
 const $ = s => document.querySelector(s);
+// Opened as a local file: talk to serve.py on this computer. Hosted (Firebase): the same site's /api route.
+const API = location.protocol === 'file:' ? 'http://127.0.0.1:8000' : '/api';
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 let chart, candleS, ema20S, ema50S, timer = null, ws = null, wsKey = '', prec = 4, lastTick = 0, lastPx = null, candleEnd = 0;
 function setLive(text, state) { const b = $('#liveBadge'); b.textContent = text; b.className = 'live' + (state ? ' ' + state : ''); }
@@ -834,7 +839,7 @@ async function longRunStats(sym, tf, H) {
   const key = `${sym}_${tf}_${H}`;
   if (key in lrCache) return lrCache[key];
   try {
-    const r = await fetch(`http://127.0.0.1:8000/stats?symbol=${encodeURIComponent(sym)}&interval=${tf}&horizon=${H}`);
+    const r = await fetch(`${API}/stats?symbol=${encodeURIComponent(sym)}&interval=${tf}&horizon=${H}`);
     if (!r.ok) throw new Error();
     const rows = await r.json(), map = {};
     rows.forEach(x => { (map[x.pattern] = map[x.pattern] || {})[x.trend] = x; });
@@ -846,7 +851,7 @@ async function longRunStats(sym, tf, H) {
 // The research detector and trained model, run by the local server on the same candles
 async function serverPatterns(sym, tf, c) {
   try {
-    const r = await fetch('http://127.0.0.1:8000/patterns', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    const r = await fetch(`${API}/patterns`, {method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({symbol: sym, interval: tf, candles: c.map(x => [x.time * 1000, x.open, x.high, x.low, x.close, x.volume || 0])})});
     if (!r.ok) throw new Error();
     return await r.json();
@@ -890,6 +895,7 @@ async function run() {
   }).join('') || '<tr><td colspan="4" class="mut">No patterns yet.</td></tr>';
 
   modelSignal(sym, tf);
+  forwardLog();
   if (demo) { stopLive(); setLive('Sample data', 'off'); } else startLive(sym, tf);
   if (!demo) { st.textContent = `${sym} ${tf}: ${c.length} closed candles, ${found.length} patterns. Updated ${new Date().toLocaleTimeString()}.`; st.className = 'status'; }
 }
@@ -898,7 +904,9 @@ async function modelSignal(sym, tf) {
   const L = $('#mLabel'), S = $('#mSub'), I = $('#mInfo');
   const pct = x => (x === null || x === undefined || isNaN(x)) ? 'n/a' : Math.round(x * 100) + '%';
   try {
-    const r = await fetch(`http://127.0.0.1:8000/predict?symbol=${encodeURIComponent(sym)}&interval=${tf}`);
+    const cs0 = lastRun ? lastRun.c : [];
+    const r = await fetch(`${API}/predict`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({symbol: sym, interval: tf, candles: cs0.map(x => [x.time * 1000, x.open, x.high, x.low, x.close, x.volume || 0])})});
     const j = await r.json();
     if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
     L.textContent = j.signal === 'NO TRADE' ? 'No trade' : j.signal;
@@ -999,17 +1007,39 @@ async function explainChart() {
   out.textContent = 'Writing… a local model can take up to a minute.';
   eng.textContent = '';
   try {
-    const r = await fetch('http://127.0.0.1:8000/explain', {method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({lang: $('#lang').value, facts})});
+    const r = await fetch(`${API}/explain`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lang: 'en', facts})});
     const j = await r.json();
     if (!r.ok) throw new Error(j.detail || 'HTTP ' + r.status);
     out.textContent = j.text;
-    eng.textContent = `Written by ${j.engine} from the numbers on this page. It can make mistakes; the numbers are the source.`;
+    eng.textContent = `${j.note || ''}Written by ${j.engine} from the numbers on this page. It can make mistakes; the numbers are the source.`;
   } catch (e) {
     out.textContent = /No AI engine/.test(e.message) ? e.message : 'Start the local server first: uvicorn serve:app --port 8000';
   }
 }
 $('#explainBtn').addEventListener('click', explainChart);
+
+// ---------- Forward log: patterns recorded live, before their outcome ----------
+async function forwardLog() {
+  const el = $('#flog');
+  try {
+    const r = await fetch(`${API}/log/summary`);
+    if (!r.ok) throw new Error();
+    const j = await r.json(), b = j.baseline;
+    if (!j.patterns) {
+      el.innerHTML = 'Nothing recorded yet. Start the logger: <code>python forward_log.py --loop 900</code> (scans every 15 minutes).';
+      return;
+    }
+    const since = new Date(j.since).toLocaleDateString([], {month: 'short', day: 'numeric', year: 'numeric'});
+    const lean = j.lean_judged ? `The lean picked the breakout side ${j.lean_right} of ${j.lean_judged} times (${j['lean_right_%']}%). Chance alone gives about ${b['lean_side_random_%']}% because swing points are confirmed late, so only a clearly higher number would mean something.` : 'No lean judged yet.';
+    const tgt = j.trades_resolved ? `Targets hit before the stop: ${j.targets_hit} of ${j.trades_resolved} (${j['target_%']}%). Research: ${b['target_research_%']}%, random data ${b['target_random_%']}%.` : 'No trade resolved yet.';
+    const rec = (j.recent || []).map(x => `<div class="row"><b class="${x.bdir > 0 ? 'up' : x.bdir < 0 ? 'down' : ''}">${x.symbol} ${x.timeframe} ${x.pattern}</b><span class="mut">${x.status}</span></div>`).join('');
+    el.innerHTML = `<p style="margin:0 0 8px">Since ${since}: ${j.patterns} patterns recorded before their outcome, ${j.resolved} resolved, ${j.open} still open.</p>
+      <p style="margin:0 0 8px">${tgt}</p><p class="mut" style="margin:0 0 10px">${lean}</p><div class="list">${rec}</div>`;
+  } catch (e) {
+    el.textContent = 'Start the local server to see the forward log: uvicorn serve:app --port 8000';
+  }
+}
 
 function schedule() { clearInterval(timer); if ($('#auto').checked) timer = setInterval(run, 60000); }
 $('#load').addEventListener('click', () => { run(); schedule(); });

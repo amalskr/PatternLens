@@ -147,6 +147,34 @@ class Explain(BaseModel):
     facts: dict
 
 
+import re
+
+# Scripts a Sinhala answer must not contain: Devanagari, Hebrew, Arabic, CJK, Japanese kana
+_FOREIGN = re.compile(r"[\u0590-\u06FF\u0900-\u097F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]")
+
+
+def _ask(system, user):
+    if os.environ.get("ANTHROPIC_API_KEY"):  # paid, better Sinhala
+        r = requests.post("https://api.anthropic.com/v1/messages", timeout=60, headers={
+            "x-api-key": os.environ["ANTHROPIC_API_KEY"], "anthropic-version": "2023-06-01",
+            "content-type": "application/json"}, json={
+            "model": os.environ.get("ANALYST_MODEL", "claude-haiku-5-5"), "max_tokens": 600,
+            "system": system, "messages": [{"role": "user", "content": user}]})
+        r.raise_for_status()
+        return "".join(b.get("text", "") for b in r.json()["content"]), "Claude API"
+    model = os.environ.get("OLLAMA_MODEL")  # free, runs on this computer
+    if not model:  # use whichever model is installed in Ollama
+        tags = requests.get("http://localhost:11434/api/tags", timeout=5).json().get("models", [])
+        if not tags:
+            raise RuntimeError("Ollama has no model installed")
+        model = tags[0]["name"]
+    r = requests.post("http://localhost:11434/api/chat", timeout=180, json={
+        "model": model, "stream": False,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]})
+    r.raise_for_status()
+    return r.json()["message"]["content"], f"Ollama {model} (local)"
+
+
 @app.post("/explain")
 def explain(req: Explain):
     key = json.dumps([req.lang, req.facts], sort_keys=True)
@@ -155,26 +183,73 @@ def explain(req: Explain):
     lang = "Sinhala (සිංහල), with crypto and pattern names left in English" if req.lang == "si" else "English"
     system = ANALYST_RULES.format(lang=lang)
     user = "Facts:\n" + json.dumps(req.facts, indent=1, ensure_ascii=False)
+    note = ""
     try:
-        if os.environ.get("ANTHROPIC_API_KEY"):  # paid, better Sinhala
-            r = requests.post("https://api.anthropic.com/v1/messages", timeout=60, headers={
-                "x-api-key": os.environ["ANTHROPIC_API_KEY"], "anthropic-version": "2023-06-01",
-                "content-type": "application/json"}, json={
-                "model": os.environ.get("ANALYST_MODEL", "claude-haiku-5-5"), "max_tokens": 600,
-                "system": system, "messages": [{"role": "user", "content": user}]})
-            r.raise_for_status()
-            text, engine = "".join(b.get("text", "") for b in r.json()["content"]), "Claude API"
-        else:  # free, runs on this computer
-            model = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
-            r = requests.post("http://localhost:11434/api/chat", timeout=180, json={
-                "model": model, "stream": False,
-                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]})
-            r.raise_for_status()
-            text, engine = r.json()["message"]["content"], f"Ollama {model} (local)"
+        text, engine = _ask(system, user)
+        if req.lang == "si" and (_FOREIGN.search(text) or len(re.findall(r"[\u0D80-\u0DFF]", text)) < 40):
+            # The model wrote other scripts or hardly any Sinhala: do not show it, fall back to English
+            text, engine = _ask(ANALYST_RULES.format(lang="English"), user)
+            note = "The Sinhala answer failed a quality check (wrong script), so this one is in English. "
     except Exception as e:
         raise HTTPException(503, "No AI engine reachable. Free option: install Ollama and run "
                                  "'ollama pull qwen2.5:7b'. Paid option: set ANTHROPIC_API_KEY before starting the server. "
                                  f"({type(e).__name__})")
-    out = {"text": text.strip(), "engine": engine}
+    out = {"text": text.strip(), "engine": engine, "note": note}
     _CACHE[key] = out
     return out
+
+
+# ---------- Forward log ----------
+from fastapi import Header
+
+import forward_log
+
+_STORE = None
+
+
+def store():
+    global _STORE
+    if _STORE is None:
+        _STORE = forward_log.get_store()
+    return _STORE
+
+
+@app.post("/log/scan")
+def log_scan(x_scan_token: str | None = Header(default=None)):
+    """Called on a schedule (Cloud Scheduler when hosted). If SCAN_TOKEN is set, the caller must send it."""
+    if os.environ.get("SCAN_TOKEN") and x_scan_token != os.environ["SCAN_TOKEN"]:
+        raise HTTPException(403, "Wrong or missing X-Scan-Token header")
+    return forward_log.scan(store(), CALL)
+
+
+@app.get("/log/summary")
+def log_summary():
+    return json.loads(json.dumps(forward_log.summary(store()), default=str))
+
+
+# ---------- Prediction from the page's own candles (no Binance call from the server) ----------
+@app.post("/predict")
+def predict_from_candles(req: Candles):
+    key = f"{req.symbol.upper()}_{req.interval}"
+    if key not in MODELS and (Path("models") / f"{key}.joblib").exists():
+        MODELS[key] = joblib.load(Path("models") / f"{key}.joblib")
+    if key not in MODELS:
+        raise HTTPException(404, f"No model for {key}. Run data.py and train.py for it first.")
+    b = MODELS[key]
+    df = pd.DataFrame(req.candles, columns=["t", "open", "high", "low", "close", "volume"])
+    df.index = pd.to_datetime(df["t"], unit="ms", utc=True)
+    X, _ = build_features(df[["open", "high", "low", "close", "volume"]])
+    p = float(b["iso"].predict(b["model"].predict_proba(X[b["features"]].iloc[[-1]])[:, 1])[0])
+    signal = "BUY" if p >= b["up"] else "SELL" if p <= b["dn"] else "NO TRADE"
+    return {"symbol": req.symbol.upper(), "interval": req.interval, "candle_time": df.index[-1].isoformat(),
+            "prob_up": round(p, 3), "signal": signal, "horizon": b["horizon"], "k": b["k"],
+            "up": b["up"], "dn": b["dn"], "cv": clean(b["cv_summary"]), "holdout": clean(b["holdout_metrics"])}
+
+
+# ---------- Hosting: Firebase Hosting forwards /api/... to this server ----------
+@app.middleware("http")
+async def strip_api_prefix(request, call_next):
+    path = request.scope["path"]
+    if path == "/api" or path.startswith("/api/"):
+        request.scope["path"] = path[4:] or "/"
+    return await call_next(request)
