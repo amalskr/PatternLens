@@ -4,3 +4,10 @@ data/*.parquet
 models/*.joblib
 .idea/
 .DS_Store
+alerts.env
+alerts.env
+alerts.env
+results/forward_log.sqlite
+results/alert_state.json
+results/chart_patterns_dataset.csv
+public/

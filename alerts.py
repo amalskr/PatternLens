@@ -1,0 +1,146 @@
+"""Telegram alerts.
+
+  * Model signal: a message when a trained model (models/<SYMBOL>_<interval>.joblib) changes to BUY or
+    SELL on a closed candle. Note: these models scored 0.500 in testing, the same as a coin flip.
+  * Pattern events (ALERT_PATTERNS=1): a chart pattern starts forming, breaks out, or reaches its
+    target or stop. Sent by forward_log.py after each scan.
+
+Setup:
+  1. In Telegram, open @BotFather, send /newbot, copy the token it gives you.
+  2. Send any message to your new bot, then run:  TELEGRAM_TOKEN=... python alerts.py --chat-id
+  3. Test:  TELEGRAM_TOKEN=... TELEGRAM_CHAT_ID=... python alerts.py --test
+  4. Run with the forward log:  TELEGRAM_TOKEN=... TELEGRAM_CHAT_ID=... python forward_log.py --loop 300
+"""
+import argparse
+import json
+import os
+from pathlib import Path
+
+import joblib
+import pandas as pd
+import requests
+
+from features import atr, build_features
+
+STATE = Path("results/alert_state.json")
+TF_MIN = {"15m": 15, "1h": 60, "4h": 240}
+
+
+def enabled():
+    return bool(os.environ.get("TELEGRAM_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID"))
+
+
+def send(text):
+    r = requests.post(f"https://api.telegram.org/bot{os.environ['TELEGRAM_TOKEN']}/sendMessage",
+                      json={"chat_id": os.environ["TELEGRAM_CHAT_ID"], "text": text, "disable_web_page_preview": True},
+                      timeout=15)
+    if not r.ok:
+        print(f"Telegram error {r.status_code}: {r.text[:200]}")
+    return r.ok
+
+
+def _state():
+    return json.loads(STATE.read_text()) if STATE.exists() else {}
+
+
+def _save(st):
+    STATE.parent.mkdir(exist_ok=True)
+    STATE.write_text(json.dumps(st, indent=1))
+
+
+def model_signals(fetch):
+    """Check every trained model on its latest closed candle; alert when the signal changes to BUY or SELL."""
+    st, sent = _state(), 0
+    for path in sorted(Path("models").glob("*_*.joblib")):
+        if path.stem == "pattern_call":
+            continue
+        sym, tf = path.stem.rsplit("_", 1)
+        b = joblib.load(path)
+        try:
+            df = fetch(sym, tf)
+        except Exception as e:
+            print(f"alerts: {sym} {tf} fetch failed ({type(e).__name__})")
+            continue
+        X, _ = build_features(df)
+        p = float(b["iso"].predict(b["model"].predict_proba(X[b["features"]].iloc[[-1]])[:, 1])[0])
+        signal = "BUY" if p >= b["up"] else "SELL" if p <= b["dn"] else "NO TRADE"
+        candle = df.index[-1].isoformat()
+        key = f"model|{path.stem}"
+        last = st.get(key, {})
+        if last.get("candle") == candle:
+            continue  # this candle was already checked
+        st[key] = {"candle": candle, "signal": signal}
+        if signal == "NO TRADE" or signal == last.get("signal"):
+            continue  # alert only when a trade signal appears or flips
+        px, step = float(df["close"].iloc[-1]), b["k"] * float(atr(df).iloc[-1])
+        hours = TF_MIN.get(tf, 60) * b["horizon"] / 60
+        span = f"{hours:g} hours" if hours >= 2 else f"{int(hours * 60)} minutes"
+        auc = (b.get("cv_summary") or {}).get("auc")
+        msg = (f"✨ AI model: {signal} signal, {sym} {tf}\n"
+               f"Price {px:.5g}, candle closed {pd.Timestamp(candle).tz_convert('Asia/Colombo'):%d %b %H:%M} (Sri Lanka)\n"
+               + (f"Next {span}: {100 * p:.0f}% chance price reaches {px + step:.5g} before {px - step:.5g}.\n" if signal == "BUY" else
+                  f"Next {span}: {100 * (1 - p):.0f}% chance price drops to {px - step:.5g} before {px + step:.5g}.\n")
+               + 
+               f"Model test score {auc:.3f} (0.500 = coin flip). Not financial advice.")
+        if send(msg):
+            sent += 1
+    _save(st)
+    return sent
+
+
+def _pattern_rates():
+    p = Path("results/chart_patterns_dataset.csv")
+    if not p.exists():
+        return {}
+    ds = pd.read_csv(p, usecols=["name", "null", "status"])
+    done = ds[ds.status.isin(["target", "stop"])]
+    out = {}
+    for nm, g in done.groupby("name"):
+        r, n = g[g.null == 0], g[g.null == 1]
+        if len(r) >= 30 and len(n) >= 30:
+            out[nm] = ((r.status == "target").mean() * 100, (n.status == "target").mean() * 100)
+    return out
+
+
+def pattern_events(events):
+    """events from forward_log.scan: new patterns, breakouts and results."""
+    if not events or os.environ.get("ALERT_PATTERNS") != "1":
+        return 0
+    rates, sent = _pattern_rates(), 0
+    f = lambda v: "n/a" if v is None else f"{v:.5g}"
+    for ev in events:
+        r = ev["rec"]
+        head = f"{r['symbol']} {r['timeframe']} {r['pattern']}"
+        hist = f"\nHistory: targets hit {rates[r['pattern']][0]:.0f}% (random data {rates[r['pattern']][1]:.0f}%)." if r["pattern"] in rates else ""
+        if ev["type"] == "new":
+            if r["status"] != "forming":
+                continue
+            lv = f"breaks up above {f(r.get('up_entry'))}, down below {f(r.get('dn_entry'))}" if r.get("up_entry") else "watching the neckline"
+            msg = f"New pattern forming: {head}\nIt {lv}.{hist}"
+        elif ev["type"] == "breakout":
+            msg = (f"Breakout: {head} broke {'up' if r['bdir'] > 0 else 'down'} at {f(r.get('entry'))}\n"
+                   f"Target {f(r.get('target'))}, stop {f(r.get('stop'))}.{hist}")
+        else:
+            res = {"target": "reached its target", "stop": "hit its stop", "timeout": "ran out of time",
+                   "no breakout": "ended without a breakout"}.get(r["status"], r["status"])
+            msg = f"Result: {head} {res}."
+        if send(msg + "\nNot financial advice."):
+            sent += 1
+    return sent
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--chat-id", action="store_true", help="print the chat id of whoever messaged the bot")
+    ap.add_argument("--test", action="store_true", help="send a test message")
+    a = ap.parse_args()
+    if a.chat_id:
+        r = requests.get(f"https://api.telegram.org/bot{os.environ['TELEGRAM_TOKEN']}/getUpdates", timeout=15).json()
+        chats = {u["message"]["chat"]["id"]: u["message"]["chat"].get("first_name", "") for u in r.get("result", []) if "message" in u}
+        print(chats or "No messages yet: send any message to your bot in Telegram first, then run this again.")
+    elif a.test:
+        print("sent" if send("Pattern Lens: Telegram alerts are working.") else "failed")
+
+
+if __name__ == "__main__":
+    main()

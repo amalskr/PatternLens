@@ -219,7 +219,9 @@ def log_scan(x_scan_token: str | None = Header(default=None)):
     """Called on a schedule (Cloud Scheduler when hosted). If SCAN_TOKEN is set, the caller must send it."""
     if os.environ.get("SCAN_TOKEN") and x_scan_token != os.environ["SCAN_TOKEN"]:
         raise HTTPException(403, "Wrong or missing X-Scan-Token header")
-    return forward_log.scan(store(), CALL)
+    res = forward_log.scan(store(), CALL)
+    res["alerts_sent"] = forward_log.alert(res)
+    return res
 
 
 @app.get("/log/summary")

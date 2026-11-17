@@ -88,6 +88,7 @@ def num(x):
 def scan(store, call=None):
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     added = updated = 0
+    events = []  # for alerts: new patterns, breakouts, results
     for sym in WATCH:
         for tf in TFS:
             try:
@@ -112,16 +113,32 @@ def scan(store, call=None):
                            "up_entry": num(r.get("up_entry")), "dn_entry": num(r.get("dn_entry")),
                            "status": r["status"], "bdir": int(r["bdir"]), "resolved": False}
                     added += 1
+                    prev = None
                 elif rec["resolved"] or rec["status"] == r["status"]:
                     continue
                 else:
                     updated += 1
+                    prev = rec["status"]
                 rec.update(status=r["status"], bdir=int(r["bdir"]), entry=num(r.get("entry")),
                            stop=num(r.get("stop")), target=num(r.get("target")), last_checked=now)
                 if r["status"] in RESOLVED:
                     rec.update(resolved=True, resolved_at=now)
                 store.put(key, rec)
-    return {"scanned_at": now, "added": added, "updated": updated}
+                if prev is None:
+                    events.append({"type": "new", "rec": dict(rec)})
+                elif r["status"] in RESOLVED:
+                    events.append({"type": "result", "rec": dict(rec)})
+                elif prev == "forming" and r["status"] == "open":
+                    events.append({"type": "breakout", "rec": dict(rec)})
+    return {"scanned_at": now, "added": added, "updated": updated, "events": events}
+
+
+def alert(result):
+    """Telegram alerts after a scan, if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID are set."""
+    import alerts
+    if not alerts.enabled():
+        return 0
+    return alerts.model_signals(fetch) + alerts.pattern_events(result["events"])
 
 
 def summary(store):
@@ -157,7 +174,9 @@ def main():
     call_path = Path("models/pattern_call.joblib")
     call = joblib.load(call_path) if call_path.exists() else None
     while True:
-        print(scan(store, call))
+        res = scan(store, call)
+        sent = alert(res)
+        print({k: v for k, v in res.items() if k != "events"}, f"alerts sent: {sent}")
         if not a.loop:
             break
         time.sleep(a.loop)
