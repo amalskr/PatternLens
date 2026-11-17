@@ -30,7 +30,7 @@ label.chk{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--mut
 .grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px}
 @media (max-width:900px){.grid{grid-template-columns:1fr}}
 .panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
-#chart{height:560px;width:100%}
+#chart{height:560px;width:100%;position:relative}
 @media (max-width:600px){#chart{height:420px}}
 .status{font-size:13px;color:var(--muted);margin:10px 2px 0;min-height:18px}
 .status.warn{color:var(--warn)}
@@ -68,8 +68,12 @@ td.n{text-align:right}th.n{text-align:right}
         <option value="3">Next 3 candles</option><option value="5" selected>Next 5 candles</option><option value="10">Next 10 candles</option>
       </select>
       <select id="marks" aria-label="Chart markers">
-        <option value="trend" selected>Markers: trend changes</option><option value="research">Markers: research signals</option><option value="all">Markers: all patterns</option><option value="none">Markers: none</option>
+        <option value="trend" selected>Markers: trend changes</option><option value="backtest">Backtest: every pattern and its result</option><option value="breaks">Backtest: patterns at trend line breaks</option><option value="research">Markers: research signals</option><option value="all">Markers: all patterns</option><option value="none">Markers: none</option>
       </select>
+      <select id="pat" aria-label="Pattern filter" style="display:none">
+        <option value="all">All patterns</option><option>Bull engulfing</option><option>Bear engulfing</option><option>Hammer</option><option>Shooting star</option><option>Morning star</option><option>Evening star</option><option>Three soldiers</option><option>Three crows</option><option>Double top</option><option>Double bottom</option>
+      </select>
+      <label class="chk"><input type="checkbox" id="tl" style="width:auto"> Trend lines</label>
       <button id="load">Load chart</button>
       <label class="chk"><input type="checkbox" id="auto" checked style="width:auto"> Auto refresh</label>
       <span class="live" id="liveBadge" aria-live="polite">Connecting…</span>
@@ -156,6 +160,12 @@ function initChart() {
   ema20S = chart.addLineSeries({lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false});
   ema50S = chart.addLineSeries({lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false});
   applySeriesColors();
+  const ov = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  ov.id = 'overlay';
+  ov.setAttribute('style', 'position:absolute;left:0;top:0;pointer-events:none;z-index:3;overflow:hidden');
+  $('#chart').appendChild(ov);
+  chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleBoxes);
+  new ResizeObserver(scheduleBoxes).observe($('#chart'));
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { chart.applyOptions(themeOpts()); applySeriesColors(); if (lastRun) draw(lastRun); });
 }
 function applySeriesColors() {
@@ -219,12 +229,12 @@ function detect(c, e20) {
   for (let n = 1; n < highs.length; n++) {
     const p = highs[n - 1], q = highs[n]; if (q - p < 8) continue;
     const h1 = c[p].high, h2 = c[q].high; let trough = Infinity; for (let j = p; j <= q; j++) trough = Math.min(trough, c[j].low);
-    if (Math.abs(h1 - h2) / h1 < tol && (Math.min(h1, h2) - trough) / h1 > 0.015) found.push({i: Math.min(q + k, c.length - 1), name: 'Double top'});
+    if (Math.abs(h1 - h2) / h1 < tol && (Math.min(h1, h2) - trough) / h1 > 0.015) found.push({i: Math.min(q + k, c.length - 1), name: 'Double top', from: p});
   }
   for (let n = 1; n < lows.length; n++) {
     const p = lows[n - 1], q = lows[n]; if (q - p < 8) continue;
     const l1 = c[p].low, l2 = c[q].low; let peak = -Infinity; for (let j = p; j <= q; j++) peak = Math.max(peak, c[j].high);
-    if (Math.abs(l1 - l2) / l1 < tol && (peak - Math.max(l1, l2)) / l1 > 0.015) found.push({i: Math.min(q + k, c.length - 1), name: 'Double bottom'});
+    if (Math.abs(l1 - l2) / l1 < tol && (peak - Math.max(l1, l2)) / l1 > 0.015) found.push({i: Math.min(q + k, c.length - 1), name: 'Double bottom', from: p});
   }
   return found.map(f => Object.assign(f, {dir: PATTERNS[f.name].dir})).sort((x, y) => x.i - y.i);
 }
@@ -258,6 +268,70 @@ function bias(c, found, st, e20, e50, rs) {
   return {score: Math.max(-2, Math.min(2, score)), reasons};
 }
 
+const SPAN = {'Bull engulfing': 2, 'Bear engulfing': 2, 'Hammer': 1, 'Shooting star': 1, 'Morning star': 3,
+  'Evening star': 3, 'Three soldiers': 3, 'Three crows': 3};
+let tlSeries = [], boxPending = false;
+
+function pivots(c, k) {
+  const hi = [], lo = [];
+  for (let i = k; i < c.length - k; i++) {
+    let h = true, l = true;
+    for (let j = i - k; j <= i + k; j++) { if (c[j].high > c[i].high) h = false; if (c[j].low < c[i].low) l = false; }
+    if (h) hi.push(i); if (l) lo.push(i);
+  }
+  return {hi, lo};
+}
+// Falling resistance through two swing highs, rising support through two swing lows. A line is kept only
+// if no close crossed it between its two anchor points; it runs on until a close breaks it (max 60 candles).
+function trendLines(c, k = 6, maxLen = 60) {
+  const {hi, lo} = pivots(c, k), lines = [];
+  const build = (piv, isRes) => {
+    for (let n = 1; n < piv.length; n++) {
+      const a = piv[n - 1], b = piv[n];
+      const va = isRes ? c[a].high : c[a].low, vb = isRes ? c[b].high : c[b].low, slope = (vb - va) / (b - a);
+      if (isRes ? slope >= 0 : slope <= 0) continue;
+      const at = i => va + slope * (i - a);
+      let clean = true;
+      for (let i = a + 1; i < b; i++) if (isRes ? c[i].close > at(i) : c[i].close < at(i)) { clean = false; break; }
+      if (!clean) continue;
+      let end = Math.min(c.length - 1, b + maxLen), brk = null;
+      for (let i = b + k + 1; i <= end; i++)  // swing point b is only confirmed k candles later
+        if (isRes ? c[i].close > at(i) : c[i].close < at(i)) { brk = i; end = i; break; }
+      lines.push({a, end, va, vend: at(end), isRes, brk});
+    }
+  };
+  build(hi, true); build(lo, false);
+  return lines;
+}
+
+function scheduleBoxes() {
+  if (boxPending) return;
+  boxPending = true;
+  requestAnimationFrame(() => { boxPending = false; drawBoxes(); });
+}
+function drawBoxes() {
+  const svg = $('#overlay');
+  if (!svg) return;
+  if (!lastRun || !lastRun.boxes || !lastRun.boxes.length) { svg.innerHTML = ''; return; }
+  const c = lastRun.c, ts = chart.timeScale(), bs = ts.options().barSpacing;
+  svg.setAttribute('width', ts.width());
+  svg.setAttribute('height', Math.max(0, $('#chart').clientHeight - ts.height()));
+  let out = '';
+  for (const b of lastRun.boxes) {
+    const x1 = ts.timeToCoordinate(c[b.from].time), x2 = ts.timeToCoordinate(c[b.i].time);
+    if (x1 === null || x2 === null || x2 < -50 || x1 > ts.width() + 50) continue;
+    let hi = -Infinity, lo = Infinity;
+    for (let j = b.from; j <= b.i; j++) { hi = Math.max(hi, c[j].high); lo = Math.min(lo, c[j].low); }
+    const y1 = candleS.priceToCoordinate(hi), y2 = candleS.priceToCoordinate(lo);
+    if (y1 === null || y2 === null) continue;
+    const col = b.ok === null ? css('--muted') : b.ok ? css('--up') : css('--down');
+    const x = x1 - bs / 2 - 2, w = x2 - x1 + bs + 4, y = y1 - 4, h = y2 - y1 + 8;
+    out += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="3" fill="${col}" fill-opacity="0.12" stroke="${col}" stroke-width="1.5"/>`;
+    out += `<text x="${x}" y="${y - 5}" font-size="11" font-family="Sora, system-ui, sans-serif" fill="${col}">${b.label}</text>`;
+  }
+  svg.innerHTML = out;
+}
+
 let lastRun = null;
 function draw(run) {
   const {c, found, e20, e50} = run, last = c.length - 1;
@@ -283,7 +357,48 @@ function draw(run) {
     marks = found.map(f => mk(f.i, f.dir, PATTERNS[f.name].short));
     $('#markNote').textContent = 'All patterns, labelled by their textbook direction.';
   } else $('#markNote').textContent = '';
+
+  // Trend lines and their breaks
+  const showTL = $('#tl').checked || mode === 'breaks';
+  const lines = trendLines(c), brks = lines.filter(L => L.brk !== null);
+  tlSeries.forEach(x => chart.removeSeries(x));
+  tlSeries = [];
+  if (showTL) {
+    lines.forEach(L => {
+      const ser = chart.addLineSeries({color: L.isRes ? dn : up, lineWidth: 1, lineStyle: 2, priceLineVisible: false,
+        lastValueVisible: false, crosshairMarkerVisible: false});
+      ser.setData([{time: c[L.a].time, value: L.va}, {time: c[L.end].time, value: L.vend}]);
+      tlSeries.push(ser);
+    });
+    brks.forEach(L => marks.push({time: c[L.brk].time, position: L.isRes ? 'belowBar' : 'aboveBar', color: L.isRes ? up : dn,
+      shape: 'circle', text: L.isRes ? 'Break up' : 'Break down'}));
+    marks.sort((a, b) => a.time - b.time);
+  }
+
+  // Backtest boxes: every pattern, coloured by what price did over the next H candles
+  const H = +$('#hz').value, pat = $('#pat').value;
+  $('#pat').style.display = (mode === 'backtest' || mode === 'breaks') ? '' : 'none';
+  const move = f => f.i + H < c.length ? (c[f.i + H].close / c[f.i].close - 1) * f.dir : null;
+  const nearBreak = f => brks.some(L => Math.abs(f.i - L.brk) <= 2);
+  let sel = [];
+  if (mode === 'backtest') sel = found.filter(f => pat === 'all' || f.name === pat);
+  if (mode === 'breaks') sel = found.filter(f => nearBreak(f) && (pat === 'all' || f.name === pat));
+  run.boxes = sel.map(f => {
+    const r = move(f);
+    const res = r === null ? 'pending' : `${r > 0 ? '✓' : '✗'} ${r > 0 ? '+' : ''}${(r * 100).toFixed(2)}%`;
+    return {from: f.from ?? Math.max(0, f.i - SPAN[f.name] + 1), i: f.i, ok: r === null ? null : r > 0, label: `${PATTERNS[f.name].short} ${res}`};
+  });
+  const rate = list => { const t = list.map(move).filter(r => r !== null); return t.length ? `${t.length} tested, ${Math.round(100 * t.filter(r => r > 0).length / t.length)}% worked` : 'none tested yet'; };
+  const pf = f => pat === 'all' || f.name === pat;
+  if (mode === 'backtest')
+    $('#markNote').textContent = `Boxes: green = price moved in the pattern's textbook direction after ${H} candles (move shown), red = it moved against it, grey = not enough candles yet. ${rate(sel)}.`;
+  if (mode === 'breaks')
+    $('#markNote').textContent = `Patterns within 2 candles of a trend line break: ${rate(sel)}. Same patterns anywhere: ${rate(found.filter(pf))}. About 500 candles only: check over full history before trusting a difference.`;
+  if (showTL)
+    $('#markNote').textContent += ' Dashed lines: falling resistance (red) and rising support (green) through swing points; a circle marks the close that broke a line.';
+
   candleS.setMarkers(marks);
+  scheduleBoxes();
 }
 
 async function run() {
@@ -366,6 +481,7 @@ function startLive(sym, tf) {
     if (!k) return;
     lastTick = Date.now(); lastPx = +k.c;
     candleS.update({time: toChartTime(k.t), open: +k.o, high: +k.h, low: +k.l, close: +k.c});
+    scheduleBoxes();
     document.title = `${(+k.c).toFixed(prec)} ${sym} ${tf}: Pattern Lens`;
     if (k.x) setTimeout(run, 2000);  // candle just closed: rescan patterns and the model
   };
@@ -381,7 +497,7 @@ function schedule() { clearInterval(timer); if ($('#auto').checked) timer = setI
 $('#load').addEventListener('click', () => { run(); schedule(); });
 $('#sym').addEventListener('keydown', e => { if (e.key === 'Enter') { run(); schedule(); } });
 ['#tf', '#hz'].forEach(s => $(s).addEventListener('change', run));
-$('#marks').addEventListener('change', () => { if (lastRun) draw(lastRun); });
+['#marks', '#pat', '#tl'].forEach(s => $(s).addEventListener('change', () => { if (lastRun) draw(lastRun); }));
 $('#auto').addEventListener('change', schedule);
 initChart(); run(); schedule();
 </script>
