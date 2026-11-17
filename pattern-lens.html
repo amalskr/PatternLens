@@ -109,7 +109,10 @@ td.n{text-align:right}th.n{text-align:right}
 <script>
 const $ = s => document.querySelector(s);
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-let chart, candleS, ema20S, ema50S, timer = null;
+let chart, candleS, ema20S, ema50S, timer = null, ws = null, wsKey = '', prec = 4;
+// Lightweight Charts draws every timestamp as UTC. Shifting each one by this computer's offset
+// makes the axis, crosshair and day boundaries show local time (Sri Lanka: UTC+5:30).
+const toChartTime = ms => Math.floor(ms / 1000) - new Date(ms).getTimezoneOffset() * 60;
 
 const PATTERNS = {
   'Bull engulfing': {dir: 1, short: 'BE'},
@@ -150,11 +153,11 @@ async function fetchKlines(sym, tf) {
   const r = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${encodeURIComponent(sym)}&interval=${tf}&limit=500`);
   if (!r.ok) throw new Error('Binance returned HTTP ' + r.status + (r.status === 400 ? ' (check the symbol)' : ''));
   const j = await r.json();
-  return j.map(k => ({time: Math.floor(k[0] / 1000), open: +k[1], high: +k[2], low: +k[3], close: +k[4]}));
+  return j.map(k => ({time: toChartTime(k[0]), open: +k[1], high: +k[2], low: +k[3], close: +k[4]}));
 }
 function sampleData(tf) {
   const step = {'5m': 300, '15m': 900, '1h': 3600, '4h': 14400}[tf];
-  let t = Math.floor(Date.now() / 1000 / step) * step - step * 499, p = 0.155, out = [];
+  let t = toChartTime(Math.floor(Date.now() / 1000 / step) * step * 1000) - step * 499, p = 0.155, out = [];
   let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
   for (let i = 0; i < 500; i++) {
     const drift = Math.sin(i / 40) * 0.0012;
@@ -258,6 +261,10 @@ async function run() {
   try { all = await fetchKlines(sym, tf); }
   catch (e) { all = sampleData(tf); demo = true; st.textContent = `Could not reach Binance (${e.message}). Showing sample data so you can see how it works.`; st.className = 'status warn'; }
   const live = all[all.length - 1], c = all.slice(0, -1), closes = c.map(x => x.close);
+  const px = live.close;
+  prec = px >= 100 ? 2 : px >= 10 ? 3 : px >= 0.1 ? 4 : 6;
+  const pf = {priceFormat: {type: 'price', precision: prec, minMove: Math.pow(10, -prec)}};
+  [candleS, ema20S, ema50S].forEach(x => x.applyOptions(pf));
   const e20 = ema(closes, 20), e50 = ema(closes, 50), rs = rsi(closes);
   const found = detect(c, e20), s = stats(c, found, H), b = bias(c, found, s, e20, e50, rs);
   lastRun = {c, found, e20, e50, live};
@@ -270,7 +277,7 @@ async function run() {
   $('#needle').style.left = (50 + b.score * 25) + '%';
   $('#reasons').innerHTML = b.reasons.map(r => `<li>${r}</li>`).join('');
 
-  const fmtT = t => new Date(t * 1000).toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
+  const fmtT = t => new Date(t * 1000).toLocaleString([], {timeZone: 'UTC', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
   const recent = found.slice(-12).reverse();
   $('#recent').innerHTML = recent.length ? recent.map(f =>
     `<div class="row"><b class="${f.dir > 0 ? 'up' : 'down'}">${f.name}</b><span class="mut">${fmtT(c[f.i].time)}</span></div>`).join('')
@@ -283,6 +290,7 @@ async function run() {
   }).join('') || '<tr><td colspan="4" class="mut">No patterns yet.</td></tr>';
 
   modelSignal(sym, tf);
+  if (demo) stopLive(); else startLive(sym, tf);
   if (!demo) { st.textContent = `${sym} ${tf}: ${c.length} closed candles, ${found.length} patterns. Updated ${new Date().toLocaleTimeString()}.`; st.className = 'status'; }
 }
 
@@ -307,6 +315,26 @@ async function modelSignal(sym, tf) {
     S.textContent = /No model/.test(e.message) ? e.message : 'Start the model server on this computer: uvicorn serve:app --port 8000';
     I.innerHTML = '';
   }
+}
+
+function stopLive() {
+  wsKey = '';
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+}
+function startLive(sym, tf) {
+  const key = sym + '@' + tf;
+  if (ws && wsKey === key && ws.readyState <= 1) return;
+  stopLive();
+  wsKey = key;
+  ws = new WebSocket(`wss://fstream.binance.com/ws/${sym.toLowerCase()}@kline_${tf}`);
+  ws.onmessage = ev => {
+    const k = JSON.parse(ev.data).k;
+    if (!k) return;
+    candleS.update({time: toChartTime(k.t), open: +k.o, high: +k.h, low: +k.l, close: +k.c});
+    document.title = `${(+k.c).toFixed(prec)} ${sym} ${tf}: Pattern Lens`;
+    if (k.x) setTimeout(run, 2000);  // candle just closed: rescan patterns and the model
+  };
+  ws.onclose = () => setTimeout(() => { if (wsKey === key) { ws = null; wsKey = ''; startLive(sym, tf); } }, 3000);
 }
 
 function schedule() { clearInterval(timer); if ($('#auto').checked) timer = setInterval(run, 60000); }
