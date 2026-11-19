@@ -116,11 +116,13 @@ def scan(store, call=None):
                            "status": r["status"], "bdir": int(r["bdir"]), "resolved": False}
                     added += 1
                     prev = None
-                elif rec["resolved"] or rec["status"] == r["status"]:
+                elif rec["resolved"] or (rec["status"] == r["status"] and not (r.get("back_in") and not rec.get("back_in"))):
                     continue
                 else:
                     updated += 1
                     prev = rec["status"]
+                failing = r["status"] == "open" and r.get("back_in") and not rec.get("back_in")
+                rec.update(back_in=int(r.get("back_in") or 0))
                 rec.update(status=r["status"], bdir=int(r["bdir"]), entry=num(r.get("entry")),
                            stop=num(r.get("stop")), target=num(r.get("target")), last_checked=now)
                 if r["status"] in RESOLVED:
@@ -132,15 +134,28 @@ def scan(store, call=None):
                     events.append({"type": "result", "rec": dict(rec)})
                 elif prev == "forming" and r["status"] == "open":
                     events.append({"type": "breakout", "rec": dict(rec)})
+                if failing:
+                    events.append({"type": "failing", "rec": dict(rec)})
     return {"scanned_at": now, "added": added, "updated": updated, "events": events}
 
 
 def alert(result):
-    """Telegram alerts after a scan, if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID are set."""
+    """Record the combined call for each alerted symbol (always), then send Telegram alerts if
+    TELEGRAM_TOKEN and TELEGRAM_CHAT_ID are set."""
     import alerts
+    import calls
+    changed = []
+    for sym in (alerts.ALERT_SYMBOLS or WATCH):
+        try:
+            r = calls.track(sym, "15m", fetch(sym, "15m"))
+            if r:
+                changed.append(r)
+        except Exception as e:
+            print(f"calls: {sym} failed ({type(e).__name__}: {e})")
     if not alerts.enabled():
         return 0
-    return alerts.model_signals(fetch) + alerts.pattern_events(result["events"])
+    return (alerts.model_signals(fetch) + alerts.pattern_events(result["events"]) + alerts.cross_signals(fetch)
+            + alerts.call_alerts(changed))
 
 
 def summary(store):

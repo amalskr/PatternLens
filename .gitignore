@@ -11,3 +11,4 @@ results/forward_log.sqlite
 results/alert_state.json
 results/chart_patterns_dataset.csv
 public/
+results/calls.sqlite

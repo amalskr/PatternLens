@@ -62,6 +62,11 @@ table.votes tr.call td{border-bottom:none;font-weight:600;border-top:2px solid v
 .ai-icon{width:16px;height:16px;fill:var(--accent);vertical-align:-2px;margin-left:6px;flex:none}
 .ai-tag{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:500;color:var(--accent);margin-left:6px}
 .ai-tag .ai-icon{margin-left:0;width:14px;height:14px}
+.to-live{position:absolute;right:76px;bottom:44px;z-index:4;background:var(--accent);color:#fff;border:none;border-radius:999px;padding:7px 14px;font-size:13px;font-weight:500;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.18)}
+.toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom, 0px));transform:translateX(-50%) translateY(20px);opacity:0;background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:999px;font-size:13px;pointer-events:none;transition:opacity .2s, transform .2s;z-index:20}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+@media (prefers-reduced-motion:reduce){.toast{transition:none}}
+[data-copy]{cursor:pointer}
 .foot{font-size:12px;color:var(--muted);margin-top:18px;line-height:1.6;max-width:80ch}
 </style>
 </head>
@@ -84,6 +89,7 @@ table.votes tr.call td{border-bottom:none;font-weight:600;border-top:2px solid v
         <option value="all">All patterns</option><option>Bull engulfing</option><option>Bear engulfing</option><option>Hammer</option><option>Shooting star</option><option>Morning star</option><option>Evening star</option><option>Three soldiers</option><option>Three crows</option><option>Double top</option><option>Double bottom</option><option>Doji</option>
       </select>
       <label class="chk"><input type="checkbox" id="tl" style="width:auto"> Trend lines</label>
+      <label class="chk"><input type="checkbox" id="emasig" checked style="width:auto"> EMA signals</label>
       <button id="load">Load chart</button>
       <label class="chk"><input type="checkbox" id="auto" checked style="width:auto"> Auto refresh</label>
       <span class="live" id="liveBadge" aria-live="polite">Connecting…</span>
@@ -118,12 +124,26 @@ table.votes tr.call td{border-bottom:none;font-weight:600;border-top:2px solid v
     </div>
     <div class="side">
       <section class="panel" aria-live="polite">
+        <h2>Next hour call</h2>
+        <p class="bias-label" id="callLabel">…</p>
+        <p id="callSay" style="margin:6px 0 0;font-size:15px;line-height:1.55"></p>
+        <details style="margin-top:12px"><summary class="mut" style="cursor:pointer;font-size:13px">Details</summary>
+          <p class="bias-sub" id="callSub"></p>
+          <div id="callVotes"></div>
+          <p class="bias-sub" id="callRecord" style="margin-top:10px"></p>
+        </details>
+      </section>
+      <section class="panel" aria-live="polite">
         <h2>Current bias</h2>
         <p class="bias-label" id="biasLabel">…</p>
         <p class="bias-sub" id="biasSub"></p>
         <div class="meter"><div class="needle" id="needle" style="left:50%"></div></div>
         <div class="meter-ends"><span>Bearish</span><span>Neutral</span><span>Bullish</span></div>
         <ul class="reasons" id="reasons"></ul>
+      </section>
+      <section class="panel" aria-live="polite">
+        <h2>Market context</h2>
+        <div id="ctx" class="bias-sub" style="color:var(--ink);line-height:1.65">Loading…</div>
       </section>
       <section class="panel" aria-live="polite">
         <h2 title="Made by a machine learning model (LightGBM)">Model signal<span class="ai-tag"><svg class="ai-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2.5l1.9 5.6 5.6 1.9-5.6 1.9L10 17.5l-1.9-5.6-5.6-1.9 5.6-1.9z"/><path d="M18.5 13l.95 2.55L22 16.5l-2.55.95-.95 2.55-.95-2.55L15 16.5l2.55-.95z"/></svg>AI</span></h2>
@@ -200,13 +220,27 @@ function initChart() {
   ov.setAttribute('style', 'position:absolute;left:0;top:0;pointer-events:none;z-index:3;overflow:hidden');
   $('#chart').appendChild(ov);
   chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleBoxes);
+  // "Latest" button: shown once the newest candle has been scrolled out of view, jumps back to it
+  const toLive = document.createElement('button');
+  toLive.className = 'to-live';
+  toLive.textContent = 'Latest ▸';
+  toLive.setAttribute('aria-label', 'Back to the latest candle');
+  toLive.style.display = 'none';
+  $('#chart').appendChild(toLive);
+  toLive.addEventListener('click', () => chart.timeScale().scrollToRealTime());
+  chart.timeScale().subscribeVisibleLogicalRangeChange(r => {
+    if (!r || !lastRun) return;
+    toLive.style.display = r.to < lastRun.c.length ? '' : 'none';  // newest (live) candle is off screen
+  });
   new ResizeObserver(scheduleBoxes).observe($('#chart'));
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { chart.applyOptions(themeOpts()); applySeriesColors(); if (lastRun) draw(lastRun); });
 }
 function applySeriesColors() {
   candleS.applyOptions({upColor: css('--up'), downColor: css('--down'), wickUpColor: css('--up'), wickDownColor: css('--down')});
-  ema20S.applyOptions({color: css('--warn')});
-  ema50S.applyOptions({color: css('--accent')});
+  // EMA 20 green, EMA 50 red: green crossing up through red = BUY, down through red = SELL
+  // lighter than the candles so the lines stand apart from them
+  ema20S.applyOptions({color: 'rgba(34, 197, 94, 0.5)', lineWidth: 2});
+  ema50S.applyOptions({color: 'rgba(239, 68, 68, 0.5)', lineWidth: 2});
 }
 
 async function fetchKlines(sym, tf) {
@@ -315,8 +349,8 @@ function bias(c, found, st, e20, e50, rs, lr) {
     const rate = r.tested >= 5 ? `, worked ${Math.round(100 * r.worked / r.tested)}% of ${r.tested} times in the loaded candles only (start serve.py with results/ for the full history)` : ', too few past cases to trust';
     reasons.push(`${f.name} ${ago}${rate}`);
   });
-  if (e20[last] > e50[last]) { score += 0.5; reasons.push('EMA 20 is above EMA 50, short-term trend is up'); }
-  else { score -= 0.5; reasons.push('EMA 20 is below EMA 50, short-term trend is down'); }
+  if (e20[last] > e50[last]) { score += 0.5; reasons.push('EMA 20 (green) is above EMA 50 (red), short-term trend is up'); }
+  else { score -= 0.5; reasons.push('EMA 20 (green) is below EMA 50 (red), short-term trend is down'); }
   const r = rs[last];
   if (r > 70) { score -= 0.5; reasons.push(`RSI ${r.toFixed(0)} is overbought, upside may be stretched`); }
   else if (r < 30) { score += 0.5; reasons.push(`RSI ${r.toFixed(0)} is oversold, downside may be stretched`); }
@@ -375,6 +409,8 @@ function drawBoxes() {
   svg.setAttribute('height', Math.max(0, $('#chart').clientHeight - ts.height()));
   let out = '';
   const X = i => ts.logicalToCoordinate(i), Y = v => candleS.priceToCoordinate(v);
+  const placed = [], H = Math.max(0, $('#chart').clientHeight - ts.height());
+  const free = (x1, x2, y) => !placed.some(b => x1 < b.x2 + 6 && x2 > b.x1 - 6 && Math.abs(y - b.y) < 14);
   for (const sh of lastRun.shapes || []) {
     if (sh.t === 'path') {
       const pts = sh.pts.map(([i, v]) => [X(i), Y(v)]);
@@ -395,7 +431,12 @@ function drawBoxes() {
       if ((sh.anchor === 'end' && x < 0) || (sh.anchor !== 'end' && x > W)) continue;  // its pattern is off screen
       let xs = sh.anchor === 'end' ? x - wEst : x;  // left edge of the text
       xs = Math.max(4, Math.min(xs, W - 4 - wEst));
-      out += `<text x="${xs}" y="${y + (sh.dy || 0)}" text-anchor="start" font-size="11" font-weight="600" font-family="Sora, system-ui, sans-serif" fill="${sh.col}">${sh.text}</text>`;
+      const cp = sh.copy ? ` data-copy="${sh.copy}" style="pointer-events:auto;cursor:pointer"` : '';
+      let ty = y + (sh.dy || 0);
+      for (let k = 0; k < 8 && !free(xs, xs + wEst, ty); k++) ty += sh.copy ? -14 : 14;  // step away from a label already there
+      ty = Math.max(12, Math.min(ty, H - 4));
+      placed.push({x1: xs, x2: xs + wEst, y: ty});
+      out += `<text${cp} x="${xs}" y="${ty}" text-anchor="start" font-size="11" font-weight="600" font-family="Sora, system-ui, sans-serif" fill="${sh.col}">${sh.text}</text>`;
     }
   }
   for (const b of lastRun.boxes || []) {
@@ -603,6 +644,10 @@ function resolvePattern(pt, c, last) {
     if (hitTgt) { pt.status = 'target'; pt.res = j; break; }
   }
   if (pt.status === 'open' && endScan < last) pt.status = 'timeout';  // ran out of time: neither target nor stop
+  // "Back inside": a close back across the broken boundary before the trade resolved (first sign of failure)
+  const edge = pt.kind === 'lines' ? (d > 0 ? pt.U : pt.D) : pt.N, stopAtI = pt.res ?? Math.min(last, endScan) + 1;
+  pt.backIn = null;
+  for (let j = pt.brk + 1; j < stopAtI; j++) if (d > 0 ? c[j].close < edge(j) : c[j].close > edge(j)) { pt.backIn = j; break; }
 }
 
 // One direction call per pattern, from three votes known at candle j (no future candles):
@@ -730,31 +775,21 @@ function draw(run) {
       const tag = {forming: `forming now, textbook: ${exp}`, target: `✓ broke ${went}, reached target`,
         stop: `✗ broke ${went}, then hit stop`, 'other way': `✗ textbook said ${exp}, it broke ${went}`, open: `broke ${went}, running now`,
         timeout: `broke ${went}, no result in time`}[pt.status];
-      run.shapes.push({t: 'text', i: pt.e, p: topP, dy: -10, col: failed ? dn : col, anchor: 'end', text: `${pt.name}: ${tag}`});
+      run.shapes.push({t: 'text', i: pt.e, p: topP, dy: -10, col: failed ? dn : col, anchor: 'end', text: `${pt.name}: ${tag}`, copy: pt.name});
       if (pt.status === 'forming') {
         const lenP = Math.max(6, Math.round((pt.e - pt.s) * 0.6)), now = c[last].close;
         const call = pt.call, d = call.dir, xe = last + 4 + lenP;
         const arrow = v => v > 0 ? '▲' : v < 0 ? '▼' : '•';
         const voteLine = `${call.parts.map(q => `${q.k} ${arrow(q.v)}`).join('   ')}   (${call.votes} of ${call.of})`;
         if (!pt.dir && pt.kind === 'lines') {
-          // Indecisive pattern (symmetrical triangle, consolidation channel): like the Binance cheat sheet,
-          // both sides get a plan. The side the call favours is drawn strong, the other faint.
-          const chan = pt.name === 'Consolidation channel';
-          [[1, pt.up], [-1, pt.dn]].forEach(([s2, pl]) => {
-            const c2 = s2 > 0 ? up : dn, main = s2 === d;
-            run.shapes.push({t: 'path', col: c2, op: main ? 0.75 : 0.3, pts: [[last, now], [last + 3, pl.entry], [last + 3 + lenP, pl.target]]});
-            L(last + 1, pl.entry, last + 3 + lenP, pl.entry, c2, true, 1);
-            L(last + 1, pl.target, last + 3 + lenP, pl.target, c2, true, 1);
-            run.shapes.push({t: 'text', i: xe, p: pl.target, dy: 4, col: c2, text: `${s2 > 0 ? 'Buy' : 'Short'} target ${fmt(pl.target)}${main ? '  ← lean' : ''}`});
-            run.shapes.push({t: 'text', i: xe, p: pl.entry, dy: 4, col: c2,
-              text: chan ? `${s2 > 0 ? 'Buy above' : 'Short below'} ${fmt(pl.entry)}` : `${s2 > 0 ? 'Buy above, short stop' : 'Short below, buy stop'} ${fmt(pl.entry)}`});
-          });
-          if (chan) {  // both stops sit at the middle of the channel
-            L(last + 1, pt.up.stop, last + 3 + lenP, pt.up.stop, css('--muted'), true, 1);
-            run.shapes.push({t: 'text', i: xe, p: pt.up.stop, dy: 4, col: css('--muted'), text: `Stop for either side ${fmt(pt.up.stop)}`});
-          }
-          const tl = d > 0 ? pt.up.target : pt.dn.target;
-          run.shapes.push({t: 'text', i: xe, p: tl, dy: d > 0 ? -12 : 20, col: css('--muted'), text: voteLine});
+          // Indecisive pattern (symmetrical triangle, consolidation channel): either side can win, so only
+          // the two break levels are drawn. Target and stop appear once a candle closes beyond one of them.
+          const xr = last + 3 + lenP;
+          L(last + 1, pt.up.entry, xr, pt.up.entry, up, true, 1.2);
+          L(last + 1, pt.dn.entry, xr, pt.dn.entry, dn, true, 1.2);
+          run.shapes.push({t: 'text', i: xe, p: pt.up.entry, dy: 4, col: up, text: `Breaks up above ${fmt(pt.up.entry)}`});
+          run.shapes.push({t: 'text', i: xe, p: pt.dn.entry, dy: 4, col: dn, text: `Breaks down below ${fmt(pt.dn.entry)}`});
+          run.shapes.push({t: 'text', i: xe, p: pt.dn.entry, dy: 22, col: css('--muted'), text: 'Wait for a close beyond one line'});
         } else {
           // ONE projected path in the called direction; the other side's break level is where the call is wrong
           const pl = pt.kind === 'lines' ? (d > 0 ? pt.up : pt.dn) : {entry: pt.entry, stop: pt.stop, target: pt.target};
@@ -771,6 +806,8 @@ function draw(run) {
       } else if (pt.status === 'open') {
         // Broke out and still running: show where it is heading and where it fails
         const d = pt.bdir, c2 = d > 0 ? up : dn, xe = last + 11;
+        if (pt.backIn !== null) marks.push({time: c[pt.backIn].time, position: d > 0 ? 'belowBar' : 'aboveBar',
+          color: css('--warn'), shape: 'square', text: '⚠ Back inside'});
         run.shapes.push({t: 'path', col: c2, op: 0.75, pts: [[last, c[last].close], [last + 10, pt.target]]});
         L(pt.brk, pt.entry, last + 10, pt.entry, acc, true, 1);
         L(pt.brk, pt.stop, last + 10, pt.stop, css('--muted'), true, 1);
@@ -784,7 +821,7 @@ function draw(run) {
         [[pt.entry, acc], [pt.stop, dn], [pt.target, up]].forEach(([v, c2]) => L(pt.brk, v, i1, v, c2, true, 1.2));
       }
     });
-    $('#markNote').textContent = 'Chart patterns are drawn through swing points (a swing needs a 2 ATR reversal). Green = bullish, red = bearish, blue = can break either way (triangles, consolidation channels). For a pattern still forming, the dotted path is the lean: the side the textbook direction, the trend and price position point to. Research on 37,000 patterns found this kind of guess is no better on real charts than on shuffled random ones, so read it as a description, not a forecast. Indecisive patterns (symmetrical triangle, consolidation channel) show both sides as on the Binance cheat sheet, the called side drawn stronger. "Reached target" means price hit the target before the stop after the breakout. Patterns are recognised only once their last swing point is confirmed, so nothing here uses future candles.';
+    $('#markNote').textContent = 'Chart patterns are drawn through swing points (a swing needs a 2 ATR reversal). Green = bullish, red = bearish, blue = can break either way (triangles, consolidation channels). For a pattern still forming, the dotted path is the lean: the side the textbook direction, the trend and price position point to. Research on 37,000 patterns found this kind of guess is no better on real charts than on shuffled random ones, so read it as a description, not a forecast. Indecisive patterns (symmetrical triangle, consolidation channel) show only their two break levels until a candle closes beyond one. "Reached target" means price hit the target before the stop after the breakout. Patterns are recognised only once their last swing point is confirmed, so nothing here uses future candles.';
   }
   const forming = pats.filter(pt => pt.status === 'forming');
   run.forming = forming;
@@ -799,21 +836,21 @@ function draw(run) {
   };
   const rowsF = forming.map(pt => {
     const k = pt.call, pl = pt.kind === 'lines' ? (k.dir > 0 ? pt.up : pt.dn) : {entry: pt.entry, stop: pt.stop, target: pt.target};
-    return `<div class="row"><b class="${cls(pt)}">${pt.name}</b><span>forming now</span></div>
+    return `<div class="row"><b class="${cls(pt)}" data-copy="${pt.name}" title="Tap to copy">${pt.name}</b><span>forming now</span></div>
     <table class="votes"><tbody>${k.parts.map(q => `<tr><td>${q.k}</td><td class="${q.v > 0 ? 'up' : q.v < 0 ? 'down' : 'mut'}">${q.v > 0 ? '▲ Up' : q.v < 0 ? '▼ Down' : '• None'}</td><td class="mut">${q.d}</td></tr>`).join('')}
       <tr class="call"><td>Lean</td><td class="${k.dir > 0 ? 'up' : 'down'}">${k.dir > 0 ? '▲ UP' : '▼ DOWN'}</td><td>${k.votes} of ${k.of} votes agree</td></tr></tbody></table>
     <div class="row mut" style="background:none;padding-top:0">${!pt.dir && pt.kind === 'lines'
-      ? `Indecisive: either side can win. Buy above ${fmt(pt.up.entry)}, target ${fmt(pt.up.target)}. Short below ${fmt(pt.dn.entry)}, target ${fmt(pt.dn.target)}. The lean favours ${k.dir > 0 ? 'the buy' : 'the short'}.`
+      ? `Either side can win: it breaks up above ${fmt(pt.up.entry)} or down below ${fmt(pt.dn.entry)}. Wait for a candle to close beyond one of them; the target and stop appear then.`
       : `Confirmed on a close ${k.dir > 0 ? 'above' : 'below'} ${fmt(pl.entry)}, target ${fmt(pl.target)}, wrong ${k.dir > 0 ? 'below' : 'above'} ${fmt(pl.stop)}.`}</div>${modelLine(pt)}`;
   });
   const tagS = {target: '✓ target', stop: '✗ stop', 'other way': '✗ other way', open: 'running', expired: 'no breakout', timeout: 'no result in time'};
   const rowsD = pats.filter(pt => pt.status !== 'forming' && pt.status !== 'open').slice(-6).reverse().map(pt =>
-    `<div class="row"><b class="${cls(pt)}">${pt.name}</b><span class="mut">${fT(pt.s)}, ${tagS[pt.status]}</span></div>`);
+    `<div class="row"><b class="${cls(pt)}" data-copy="${pt.name}" title="Tap to copy">${pt.name}</b><span class="mut">${fT(pt.s)}, ${tagS[pt.status]}</span></div>`);
   const rowsO = pats.filter(pt => pt.status === 'open').map(pt => {
     const d = pt.bdir, ok = pt.call ? pt.call.dir === d : null, px = run.live ? run.live.close : c[last].close;
     const back = d > 0 ? px < pt.entry : px > pt.entry;
-    return `<div class="row"><b class="${d > 0 ? 'up' : 'down'}">${pt.name}</b><span>broke ${d > 0 ? 'up' : 'down'}, running</span></div>
-    <div class="row mut" style="background:none;padding-top:0">Entry ${fmt(pt.entry)}, target ${fmt(pt.target)}, stop ${fmt(pt.stop)}.${ok === null ? '' : ` The lean was ${pt.call.dir > 0 ? 'UP' : 'DOWN'}: ${ok ? '✓ right side' : '✗ wrong side'}.`}${honest(pt.name) ? ` ${honest(pt.name)[0].toUpperCase() + honest(pt.name).slice(1)}.` : ''}${back ? ` <span style="color:var(--warn)">Price ${fmt(px)} is back ${d > 0 ? 'below' : 'above'} the breakout level: a retest, or a false break if it reaches the stop.</span>` : ''}</div>`;
+    return `<div class="row"><b class="${d > 0 ? 'up' : 'down'}" data-copy="${pt.name}" title="Tap to copy">${pt.name}</b><span>broke ${d > 0 ? 'up' : 'down'}, running</span></div>
+    <div class="row mut" style="background:none;padding-top:0">Entry ${fmt(pt.entry)}, target ${fmt(pt.target)}, stop ${fmt(pt.stop)}.${ok === null ? '' : ` The lean was ${pt.call.dir > 0 ? 'UP' : 'DOWN'}: ${ok ? '✓ right side' : '✗ wrong side'}.`}${honest(pt.name) ? ` ${honest(pt.name)[0].toUpperCase() + honest(pt.name).slice(1)}.` : ''}${pt.backIn !== null ? ` <span style="color:var(--warn)">⚠ A candle closed back inside the pattern (${fT(pt.backIn)}): the first sign this breakout is failing.</span>` : back ? ` <span style="color:var(--warn)">Price ${fmt(px)} is back ${d > 0 ? 'below' : 'above'} the breakout level: a retest, or a false break if it reaches the stop.</span>` : ''}</div>`;
   });
   $('#cpats').innerHTML = rowsF.concat(rowsO, rowsD).join('') || '<div class="row mut">No chart pattern in the loaded candles. Try another timeframe.</div>';
   $('#cpSum').textContent = forming.length ? '' : 'Nothing forming right now.';
@@ -821,6 +858,44 @@ function draw(run) {
   else $('#cpSum').textContent += ' Guessing which side a pattern breaks looks accurate even on random data, so no track record is shown. Start serve.py for the research numbers.';
   if (done.length) $('#cpSum').textContent += ` In these ${c.length} candles: ${done.length} breakouts in the expected direction were resolved, ${wins} reached target before stop (${Math.round(100 * wins / done.length)}%). ${other} broke the other way. Small sample.`;
 
+  // EMA signals: the closed candle where EMA 20 (green) crosses EMA 50 (red), the same rule as the
+  // Telegram alerts. Up through red = BUY, down through red = SELL.
+  // EMA signals, the same rules as the Telegram alerts:
+  //   BUY / SELL: EMA 20 (green) crosses EMA 50 (red) on a closed candle
+  //   BUY? / SELL?: early warning, the next close needed to cross is within one average candle move (ATR)
+  // Filters against sideways markets: no signal within 6 candles of the last cross; a warning needs the
+  // lines to have been clearly apart (0.6 ATR) in the last 12 candles, and price moving the warned way.
+  if ($('#emasig').checked) {
+    const at = atrArr(c), A20 = 2 / 21, A50 = 2 / 51, COOL = 6, APART = 0.6, LOOK = 12;
+    let warned = null, lastCross = -Infinity;
+    for (let i = 51; i < c.length; i++) {
+      const g0 = e20[i - 1] - e50[i - 1], g1 = e20[i] - e50[i];
+      if (g0 * g1 < 0) {
+        if (i - lastCross >= COOL) marks.push(g1 > 0
+          ? {time: c[i].time, position: 'belowBar', color: '#16a34a', shape: 'arrowUp', text: 'BUY'}
+          : {time: c[i].time, position: 'aboveBar', color: '#dc2626', shape: 'arrowDown', text: 'SELL'});
+        lastCross = i;
+        warned = null;
+        continue;
+      }
+      if (i - lastCross < COOL) continue;
+      const need = ((1 - A50) * e50[i] - (1 - A20) * e20[i]) / (A20 - A50);  // close that would cross next
+      const side = g1 < 0 ? 1 : -1, closing = Math.abs(g1) < Math.abs(e20[i - 3] - e50[i - 3]);
+      const dist = side > 0 ? need - c[i].close : c[i].close - need;
+      let apart = 0;
+      for (let j = i - LOOK; j < i; j++) apart = Math.max(apart, Math.abs(e20[j] - e50[j]));
+      const moving = side > 0 ? c[i].close > e20[i] && e20[i] > e20[i - 1] : c[i].close < e20[i] && e20[i] < e20[i - 1];
+      if (closing && moving && apart >= APART * at[i] && dist <= at[i] && warned !== side) {
+        marks.push(side > 0
+          ? {time: c[i].time, position: 'belowBar', color: '#4ade80', shape: 'circle', text: 'BUY?'}
+          : {time: c[i].time, position: 'aboveBar', color: '#f87171', shape: 'circle', text: 'SELL?'});
+        warned = side;
+      } else if (!closing || dist > 2 * at[i]) warned = null;
+    }
+    marks.sort((a, b) => a.time - b.time);
+  }
+
+  marks.sort((a, b) => a.time - b.time);  // markers come from several sources; the chart needs them in time order
   candleS.setMarkers(marks);
   scheduleBoxes();
 }
@@ -891,6 +966,8 @@ async function run() {
 
   modelSignal(sym, tf);
   forwardLog();
+  marketContext(sym);
+  nextHourCall(sym, tf);
   if (demo) { stopLive(); setLive('Sample data', 'off'); } else startLive(sym, tf);
   if (!demo) { st.textContent = `${sym} ${tf}: ${c.length} closed candles, ${found.length} patterns. Updated ${new Date().toLocaleTimeString()}.`; st.className = 'status'; }
 }
@@ -984,11 +1061,93 @@ async function forwardLog() {
   }
 }
 
+// ---------- Tap a pattern name to copy it ----------
+function copyText(t) {
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(t);
+  const ta = document.createElement('textarea');  // fallback for plain http pages
+  ta.value = t; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, t.length);
+  const ok = document.execCommand('copy'); ta.remove();
+  return ok ? Promise.resolve() : Promise.reject(new Error('copy failed'));
+}
+let toastTimer = null;
+function toast(msg) {
+  let el = $('#toast');
+  if (!el) { el = document.createElement('div'); el.id = 'toast'; el.className = 'toast'; el.setAttribute('role', 'status'); document.body.appendChild(el); }
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 1600);
+}
+document.addEventListener('click', e => {
+  const el = e.target.closest && e.target.closest('[data-copy]');
+  if (!el) return;
+  const t = el.getAttribute('data-copy');
+  copyText(t).then(() => toast(`Copied: ${t}`), () => toast('Could not copy on this browser'));
+});
+
+// ---------- Market context: Bitcoin, positioning, sentiment, headlines (from the local server) ----------
+async function marketContext(sym) {
+  const el = $('#ctx');
+  try {
+    const r = await fetch(`${API}/context?symbol=${encodeURIComponent(sym)}`);
+    if (!r.ok) throw new Error();
+    const x = await r.json(), b = x.btc || {}, p = x.positioning || {}, fg = x.fear_greed || {}, k = (x.corr || {}).corr_2d;
+    const sg = v => (v > 0 ? '+' : '') + v.toFixed(1) + '%';
+    const rows = [];
+    if (b.price) {
+      rows.push(`<b>Bitcoin</b> ${b.price.toLocaleString([], {maximumFractionDigits: 0})}, <span class="${b['chg_1h_%'] >= 0 ? 'up' : 'down'}">${sg(b['chg_1h_%'])}</span> last hour, ${sg(b['chg_24h_%'])} in 24h. Trend 15m <b class="${b['15m'].trend === 'up' ? 'up' : 'down'}">${b['15m'].trend}</b>, 1h <b class="${b['1h'].trend === 'up' ? 'up' : 'down'}">${b['1h'].trend}</b>.${b.fast ? ' <span style="color:var(--warn)">⚡ Moving fast this hour.</span>' : ''}`);
+      const run = (lastRun && lastRun.pats || []).filter(pt => pt.status === 'open' || pt.status === 'forming');
+      run.forEach(pt => {
+        const d = pt.status === 'open' ? pt.bdir : (pt.call ? pt.call.dir : 0);
+        if (!d) return;
+        const against = (b['1h'].trend === 'up') !== (d > 0);
+        rows.push(`${pt.name} ${pt.status === 'open' ? `broke ${d > 0 ? 'up' : 'down'}` : `leans ${d > 0 ? 'up' : 'down'}`}: ${against ? '<span style="color:var(--warn)">against Bitcoin’s 1h trend</span>' : 'with Bitcoin’s 1h trend'}.`);
+      });
+    }
+    if (typeof k === 'number') rows.push(`${sym.replace('USDT', '')} followed Bitcoin ${k > 0.7 ? 'closely' : k > 0.4 ? 'partly' : 'loosely'} over 2 days (correlation ${k.toFixed(2)}).`);
+    if (typeof p['funding_%'] === 'number') {
+      const fr = p['funding_%'], note = fr > 0.05 ? 'high: many longs, a sharp drop can squeeze them' : fr < 0 ? 'negative: many shorts, a sharp rise can squeeze them' : 'normal';
+      rows.push(`Funding ${fr.toFixed(3)}% (${note}).${typeof p['oi_chg_24h_%'] === 'number' ? ` Open interest ${sg(p['oi_chg_24h_%'])} in 24h.` : ''}`);
+    }
+    if (fg.value) rows.push(`Fear &amp; Greed: <b>${fg.value}</b> (${fg.label}).`);
+    const news = (x.news && x.news.items) || [];
+    const ago = ts => { const m = Math.max(0, Math.round((Date.now() / 1000 - ts) / 60)); return m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`; };
+    const list = news.map(n => `<div class="row"><a href="${n.link}" target="_blank" rel="noopener" style="color:var(--ink);text-decoration:none">${n.title.replace(/</g, '&lt;')}</a><span class="mut" style="white-space:nowrap">${n.source}, ${ago(n.ts)}</span></div>`).join('');
+    el.innerHTML = rows.map(t => `<p style="margin:0 0 8px">${t}</p>`).join('')
+      + (list ? `<p class="mut" style="margin:10px 0 6px">Headlines${x.news.matched ? '' : ' (none mention ' + sym.replace('USDT', '') + ' right now)'}:</p><div class="list">${list}</div>` : '')
+      + '<p class="mut" style="margin:10px 0 0">Context, not a forecast. Whether breakouts against Bitcoin fail more often has not been tested yet.</p>';
+  } catch (e) {
+    el.textContent = 'Market context needs the server (uvicorn serve:app).';
+  }
+}
+
+// ---------- Combined next-hour call (computed and recorded by the server) ----------
+async function nextHourCall(sym, tf) {
+  try {
+    const r = await fetch(`${API}/call?symbol=${encodeURIComponent(sym)}&interval=${tf}`);
+    if (!r.ok) throw new Error();
+    const j = await r.json(), mins = {'15m': 15, '1h': 60, '4h': 240}[tf] * j.horizon;
+    const span = mins < 120 ? `${mins} minutes` : `${mins / 60} hours`;
+    $('#callLabel').textContent = j.call;
+    $('#callLabel').className = 'bias-label ' + (j.call === 'BUY' ? 'up' : j.call === 'SELL' ? 'down' : '');
+    $('#callSay').textContent = j.summary || '';
+    $('#callSub').textContent = `Next ${span} from ${j.price.toFixed(prec)}. Score ${j.score >= 0 ? '+' : ''}${j.score.toFixed(1)}: BUY at +1.5 or more, SELL at -1.5 or less.`;
+    $('#callVotes').innerHTML = `<table class="votes"><tbody>${j.votes.map(v => `<tr><td>${v.k}</td><td class="${v.v > 0 ? 'up' : v.v < 0 ? 'down' : 'mut'}">${v.v > 0 ? '▲' : v.v < 0 ? '▼' : '•'} ${v.v > 0 ? '+' : ''}${v.v}</td><td class="mut">${v.why}</td></tr>`).join('')}</tbody></table>`;
+    const k = j.record || {};
+    $('#callRecord').textContent = !k.scored ? 'Track record: building. Every 15m call is recorded and checked one hour later.'
+      : `Track record since ${new Date(k.since).toLocaleDateString([], {month: 'short', day: 'numeric'})}: BUY right ${k['buy_right_%'] ?? 'n/a'}% of ${k.buy}, SELL right ${k['sell_right_%'] ?? 'n/a'}% of ${k.sell}. Price simply rose ${k['base_up_%']}% of the time.`;
+  } catch (e) {
+    $('#callLabel').textContent = '…';
+    $('#callSay').textContent = 'The call needs the server (uvicorn serve:app).';
+    $('#callSub').textContent = '';
+    $('#callVotes').innerHTML = ''; $('#callRecord').textContent = '';
+  }
+}
+
 function schedule() { clearInterval(timer); if ($('#auto').checked) timer = setInterval(run, 60000); }
 $('#load').addEventListener('click', () => { run(); schedule(); });
 $('#sym').addEventListener('keydown', e => { if (e.key === 'Enter') { run(); schedule(); } });
 ['#tf', '#hz'].forEach(s => $(s).addEventListener('change', run));
-['#marks', '#pat', '#tl'].forEach(s => $(s).addEventListener('change', () => { if (lastRun) draw(lastRun); }));
+['#marks', '#pat', '#tl', '#emasig'].forEach(s => $(s).addEventListener('change', () => { if (lastRun) draw(lastRun); }));
 $('#auto').addEventListener('change', schedule);
 initChart(); run(); schedule();
 </script>

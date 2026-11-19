@@ -244,13 +244,18 @@ def resolve(pt, c, h, l):
     target = entry + d * pt["height"]
     pt.update(entry=entry, stop=stop, target=target, status="timeout")
     end = b + 3 * max(ln, 10)
+    res = min(last, end)
     for j in range(b + 1, min(last, end) + 1):
         if (l[j] <= stop) if d > 0 else (h[j] >= stop):
-            pt["status"] = "stop"; break
+            pt["status"] = "stop"; res = j; break
         if (h[j] >= target) if d > 0 else (l[j] <= target):
-            pt["status"] = "target"; break
+            pt["status"] = "target"; res = j; break
     if pt["status"] == "timeout" and end >= last:
         pt["status"] = "open"
+    # "Back inside": a close back across the broken boundary before the trade resolved,
+    # the first visible sign that a breakout is failing
+    edge = (pt["U"] if d > 0 else pt["D"]) if pt["kind"] == "lines" else pt["N"]
+    pt["back_in_at"] = next((j for j in range(b + 1, res) if (c[j] < edge(j) if d > 0 else c[j] > edge(j))), None)
 
 
 def shuffled(df, seed):
@@ -303,6 +308,7 @@ def build(df, symbol, interval, null):
             rsi=rs[j], vol_ratio=vol_ratio, atr_pct=aj / c[j], wait=j - pt["e"],
             vote_call=vote_call, status=pt["status"], bdir=pt["bdir"],
             start=df.index[pt["s"]], entry=pt.get("entry"), stop=pt.get("stop"), target=pt.get("target"),
+            back_in=int(pt.get("back_in_at") is not None),
             up_entry=pt["U"](len(c) - 1) if pt["kind"] == "lines" else None,
             dn_entry=pt["D"](len(c) - 1) if pt["kind"] == "lines" else None,
             broke_up=np.nan if pt["bdir"] == 0 else int(pt["bdir"] > 0)))
@@ -359,6 +365,12 @@ def main():
         print(f"All patterns, {lab}: real {r:.1f}%, shuffled {n:.1f}%, edge {r - n:+.1f} pp")
     r, n = tgt(br[br.null == 0]), tgt(br[br.null == 1])
     print(f"All patterns, target before stop after breakout: real {r:.1f}%, shuffled {n:.1f}%, edge {r - n:+.1f} pp")
+    if "back_in" in br:
+        print("\nAfter a breakout, price closed back inside the pattern before the trade resolved:")
+        for lab, g in (("came back inside", br[br.back_in == 1]), ("stayed outside", br[br.back_in == 0])):
+            rr, nn = tgt(g[g.null == 0]), tgt(g[g.null == 1])
+            share = (g.null == 0).sum() / max(1, (br.null == 0).sum()) * 100
+            print(f"  {lab:<17} {share:5.1f}% of breakouts: target hit real {rr:.1f}%, shuffled {nn:.1f}%")
 
 
 if __name__ == "__main__":

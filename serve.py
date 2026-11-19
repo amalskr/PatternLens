@@ -220,3 +220,33 @@ async def password(request, call_next):
         if not ok:
             return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Pattern Lens"'})
     return await call_next(request)
+
+
+# ---------- Market context (Bitcoin, positioning, sentiment, headlines) ----------
+import market
+
+
+@app.get("/context")
+def market_context(symbol: str = "ADAUSDT"):
+    return json.loads(json.dumps(market.context(symbol.upper()), default=str))
+
+
+# ---------- Combined next-hour call ----------
+import calls
+
+_CALL = {}
+
+
+@app.get("/call")
+def combined_call(symbol: str = "ADAUSDT", interval: str = "15m"):
+    """BUY, SELL or WAIT for the next 4 candles with every vote, plus the track record of past calls."""
+    import time as _t
+    key = f"{symbol.upper()}_{interval}"
+    hit = _CALL.get(key)
+    if hit and _t.time() - hit[0] < 60:
+        return hit[1]
+    df = forward_log.fetch(symbol.upper(), interval)
+    out = json.loads(json.dumps({**calls.compute(symbol.upper(), interval, df),
+                                 "record": calls.summary(symbol.upper(), interval)}, default=str))
+    _CALL[key] = (_t.time(), out)
+    return out
